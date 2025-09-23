@@ -1,0 +1,6 @@
+[user]
+  email = akpandeya1@gmail.com
+  signingkey = 6A40D13BBB936F443084E8C9292E4F983136B86
+[gpg]
+  format = openpgp
+  
