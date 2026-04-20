@@ -1,0 +1,27 @@
+# Essential Homebrew packages for development setup
+
+# CLI tools
+gh
+git
+jira-cli
+1password-cli
+
+# Container & orchestration
+docker
+colima
+kubectl
+stern
+
+# Infrastructure tools
+vault
+awscli
+
+# Terminal & shell
+kitty
+zsh
+
+# Utilities
+jq
+wget
+curl
+tree

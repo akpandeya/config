@@ -1,0 +1,28 @@
+[user]
+    # Default to work identity
+    name = __FULL_NAME__
+    email = __WORK_EMAIL__
+
+[core]
+    editor = vim
+    autocrlf = input
+
+[init]
+    defaultBranch = main
+
+[pull]
+    rebase = false
+
+[push]
+    default = current
+    autoSetupRemote = true
+
+[credential]
+    helper = osxkeychain
+
+# Conditional includes based on directory
+[includeIf "gitdir:~/code/work/"]
+    path = ~/.gitconfig-work
+
+[includeIf "gitdir:~/code/personal/"]
+    path = ~/.gitconfig-personal
