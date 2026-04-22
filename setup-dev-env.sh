@@ -30,7 +30,11 @@ if [ -f "brew-packages.txt" ]; then
             echo "✓ $package already installed"
         else
             echo "Installing $package..."
-            brew install "$package"
+            if [[ "$package" == font-* ]]; then
+                brew install --cask "$package"
+            else
+                brew install "$package"
+            fi
         fi
     done < brew-packages.txt
 else
@@ -49,9 +53,55 @@ echo
 echo "=== Setting up git configuration ==="
 echo
 
-cd git
+REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+cd "$REPO_DIR/git"
 chmod +x setup.sh
 ./setup.sh
+
+echo
+echo "=== Setting up terminal & prompt ==="
+echo
+
+link_config() {
+    local src=$1
+    local target=$2
+
+    mkdir -p "$(dirname "$target")"
+
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "$src" ]; then
+        echo "✓ $target already linked"
+        return
+    fi
+
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        local backup="${target}.backup.$(date +%Y%m%d%H%M%S)"
+        mv "$target" "$backup"
+        echo "  Existing $target moved to $backup"
+    fi
+
+    ln -s "$src" "$target"
+    echo "✓ Linked $target -> $src"
+}
+
+link_config "$REPO_DIR/kitty/kitty.conf"       "$HOME/.config/kitty/kitty.conf"
+link_config "$REPO_DIR/kitty/tab_bar.py"       "$HOME/.config/kitty/tab_bar.py"
+link_config "$REPO_DIR/starship/starship.toml" "$HOME/.config/starship.toml"
+
+if ! grep -q 'starship init zsh' "$HOME/.zshrc" 2>/dev/null; then
+    printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
+    echo "✓ Added starship init to ~/.zshrc"
+else
+    echo "✓ starship init already in ~/.zshrc"
+fi
+
+ALIASES_LINE="[ -f \"$REPO_DIR/shell/aliases.sh\" ] && source \"$REPO_DIR/shell/aliases.sh\""
+if ! grep -qF "$REPO_DIR/shell/aliases.sh" "$HOME/.zshrc" 2>/dev/null; then
+    printf '\n# shared shell aliases\n%s\n' "$ALIASES_LINE" >> "$HOME/.zshrc"
+    echo "✓ Added shared aliases source to ~/.zshrc"
+else
+    echo "✓ shared aliases already sourced in ~/.zshrc"
+fi
 
 echo
 echo "=== Development Environment Setup Complete! ==="

@@ -19,6 +19,10 @@ awscli
 # Terminal & shell
 kitty
 zsh
+starship
+
+# Fonts
+font-jetbrains-mono-nerd-font
 
 # Utilities
 jq
