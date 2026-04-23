@@ -104,17 +104,6 @@ else
 fi
 
 echo
-echo "=== Installing uv (Python package manager) ==="
-echo
-
-if ! command -v uv &> /dev/null; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    echo "✓ uv installed"
-else
-    echo "✓ uv already installed"
-fi
-
-echo
 echo "=== Installing Jarvis ==="
 echo
 

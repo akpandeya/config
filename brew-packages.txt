@@ -24,6 +24,9 @@ starship
 # Fonts
 font-jetbrains-mono-nerd-font
 
+# Python
+uv
+
 # Utilities
 jq
 wget
