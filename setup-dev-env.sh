@@ -104,9 +104,39 @@ else
 fi
 
 echo
+echo "=== Installing uv (Python package manager) ==="
+echo
+
+if ! command -v uv &> /dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    echo "✓ uv installed"
+else
+    echo "✓ uv already installed"
+fi
+
+echo
+echo "=== Installing Jarvis ==="
+echo
+
+JARVIS_DIR="$HOME/code/personal/jarvis"
+if [ -d "$JARVIS_DIR" ]; then
+    echo "Installing jarvis from $JARVIS_DIR..."
+    uv pip install -e "$JARVIS_DIR"
+    jarvis init
+    echo "✓ Jarvis installed and initialised"
+    echo "  Edit ~/.jarvis/config.toml to configure integrations"
+    echo "  Set work_domains under [thunderbird] to label your work emails"
+    echo "  Add Firefox profile labels under [[firefox.profiles]] if desired"
+else
+    echo "⚠ Jarvis not found at $JARVIS_DIR — clone it first, then re-run this section"
+    echo "  git clone git@github.com-personal:akpandeya/jarvis.git $JARVIS_DIR"
+fi
+
+echo
 echo "=== Development Environment Setup Complete! ==="
 echo
 echo "Next steps:"
 echo "  1. Configure Jira CLI: jira init"
 echo "  2. Clone your repositories"
 echo "  3. Set up 1Password SSH agent if not already configured"
+echo "  4. Edit ~/.jarvis/config.toml to configure Jarvis integrations"
