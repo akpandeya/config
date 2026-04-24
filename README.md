@@ -45,12 +45,13 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 |---|---|
 | `bash/` | Bash profile snippets |
 | `brew-packages.txt` | Everything Homebrew installs |
+| `claude/` | User-level Claude Code skills, symlinked into `~/.claude/skills/` |
 | `git/` | gitconfig templates (one personal, one work, one default with conditional includes) |
 | `kitty/` | Terminal config |
 | `shell/` | Shared shell aliases |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
-| `setup-dev-env.sh` | Top-level bootstrap — runs Homebrew, `git/setup.sh`, `ssh/setup.sh`, symlink terminal configs, install Jarvis |
+| `setup-dev-env.sh` | Top-level bootstrap — runs Homebrew, `git/setup.sh`, `ssh/setup.sh`, symlink terminal configs and Claude skills, install Jarvis |
 
 ## Common operations
 
