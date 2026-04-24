@@ -6,6 +6,9 @@ git
 jira-cli
 1password-cli
 
+# GUI apps (required for 1Password CLI app integration — biometric unlock)
+1password
+
 # Container & orchestration
 docker
 colima

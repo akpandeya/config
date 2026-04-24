@@ -58,6 +58,25 @@ REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$REPO_DIR/git"
 chmod +x setup.sh
 ./setup.sh
+cd "$REPO_DIR"
+
+echo
+echo "=== Setting up SSH keys from 1Password ==="
+echo
+
+if [ "${SKIP_SSH:-0}" = "1" ]; then
+    echo "SKIP_SSH=1 — skipping SSH setup."
+else
+    chmod +x "$REPO_DIR/ssh/setup.sh"
+    # Don't abort the whole bootstrap if SSH setup fails (e.g. 1P not
+    # signed in yet on a brand-new machine). Print the error and move on.
+    "$REPO_DIR/ssh/setup.sh" || {
+        echo
+        echo "⚠ SSH setup failed. Rerun with:"
+        echo "  cd $REPO_DIR && ./ssh/setup.sh"
+        echo
+    }
+fi
 
 echo
 echo "=== Setting up terminal & prompt ==="
@@ -127,5 +146,4 @@ echo
 echo "Next steps:"
 echo "  1. Configure Jira CLI: jira init"
 echo "  2. Clone your repositories"
-echo "  3. Set up 1Password SSH agent if not already configured"
-echo "  4. Edit ~/.jarvis/config.toml to configure Jarvis integrations"
+echo "  3. Edit ~/.jarvis/config.toml to configure Jarvis integrations"
