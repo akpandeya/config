@@ -72,51 +72,93 @@ export_key() {
   local key_name=$1 op_item=$2
   local key_path="$SSH_DIR/$key_name"
 
-  if [ -f "$key_path" ] && ssh-keygen -y -f "$key_path" >/dev/null 2>&1; then
+  # Detect "is this a valid SSH key file" without running ssh-keygen,
+  # which would block on a passphrase prompt if the key is already
+  # passphrase-protected.
+  if [ -f "$key_path" ] && head -1 "$key_path" | grep -q "BEGIN.*PRIVATE KEY"; then
     echo "✓ $key_name already on disk"
   else
     echo "Exporting $op_item from 1Password → $key_path"
-    op read --out-file "$key_path" \
+    op read --force --out-file "$key_path" \
       "op://$VAULT/$op_item/private key?ssh-format=openssh"
     chmod 600 "$key_path"
   fi
 
-  # Derive .pub file if missing.
+  # Derive .pub file if missing. Skip silently if the key is
+  # passphrase-protected (ssh-keygen -y would block).
   if [ ! -f "$key_path.pub" ]; then
-    ssh-keygen -y -f "$key_path" >"$key_path.pub"
-    chmod 644 "$key_path.pub"
+    ssh-keygen -y -P "" -f "$key_path" >"$key_path.pub" 2>/dev/null || true
+    [ -s "$key_path.pub" ] && chmod 644 "$key_path.pub" || rm -f "$key_path.pub"
+  fi
+}
+
+passphrase_item_title() {
+  # Dedicated Login item per key, e.g. "SSH Passphrase: HF Thinkpad".
+  # Using a new item (not the SSH Key item) because 1Password's SSH Key
+  # schema is locked — you can't just `op item edit` arbitrary fields
+  # into it. Login items accept custom fields freely.
+  echo "SSH Passphrase: $1"
+}
+
+key_has_passphrase() {
+  # 0 = encrypted, 1 = plain. ssh-keygen -y -P "" returns nonzero on
+  # encrypted keys (and prints "incorrect passphrase supplied").
+  ! ssh-keygen -y -P "" -f "$1" >/dev/null 2>&1
+}
+
+get_pass_from_keychain() {
+  # Apple Keychain stores SSH passphrases under service "SSH"; the
+  # account name is the full path to the private key.
+  security find-generic-password -a "$1" -s "SSH" -w 2>/dev/null || true
+}
+
+save_pass_to_1password() {
+  local pass_title=$1 key_name=$2 pass=$3
+  if op item get "$pass_title" --vault "$VAULT" >/dev/null 2>&1; then
+    op item edit "$pass_title" --vault "$VAULT" "password=$pass" >/dev/null 2>&1
+  else
+    op item create --category login --vault "$VAULT" \
+      --title "$pass_title" --tags "ssh-unlock" \
+      "username=$key_name" "password=$pass" >/dev/null 2>&1
   fi
 }
 
 ensure_passphrase() {
   local key_name=$1 op_item=$2
   local key_path="$SSH_DIR/$key_name"
-  local pass
+  local pass_title
+  pass_title=$(passphrase_item_title "$op_item")
+  local pass=""
 
-  # Does 1Password already have a passphrase stored for this item?
-  pass=$(op read "op://$VAULT/$op_item/ssh-passphrase" 2>/dev/null || true)
+  # 1Password first (source of truth on subsequent machines).
+  pass=$(op read "op://$VAULT/$pass_title/password" 2>/dev/null || true)
 
+  # Fall back to Apple Keychain (e.g. after a partial earlier run).
   if [ -z "$pass" ]; then
-    echo "Minting new passphrase for $op_item (storing in 1Password)…"
+    pass=$(get_pass_from_keychain "$key_path")
+    if [ -n "$pass" ]; then
+      echo "Found passphrase for $key_name in Apple Keychain — syncing to 1Password"
+      save_pass_to_1password "$pass_title" "$key_name" "$pass" \
+        || echo "WARNING: could not save '$pass_title' to 1Password."
+    fi
+  fi
+
+  # Still nothing — mint a fresh one and apply it to the key.
+  if [ -z "$pass" ]; then
+    if key_has_passphrase "$key_path"; then
+      echo "Key $key_name is already passphrase-protected but we have no"
+      echo "record of the passphrase anywhere. You need to either:"
+      echo "  1. Delete ~/.ssh/$key_name and rerun (it'll re-export from 1P)"
+      echo "  2. Manually add a 'SSH Passphrase: $op_item' Login item to 1P"
+      return 1
+    fi
+    echo "Minting new passphrase for $op_item (storing as '$pass_title' in 1Password)…"
     pass=$(rand_pass)
-
-    # Apply passphrase to the on-disk key. Try empty-old first, fall back
-    # to prompting the user if the on-disk key is already passphrased.
-    if ! ssh-keygen -p -N "$pass" -P "" -f "$key_path" >/dev/null 2>&1; then
-      echo "Key $key_name is already passphrase-protected."
-      echo "Enter the current passphrase to rotate it:"
-      ssh-keygen -p -N "$pass" -f "$key_path"
-    fi
-
-    # Store back in 1Password. `op item edit` fails if the field exists
-    # with a different type; use assignment with section/type tag.
-    if ! op item edit "$op_item" --vault "$VAULT" \
-         "ssh-passphrase[password]=$pass" >/dev/null 2>&1; then
-      echo "WARNING: op item edit failed for $op_item. Saving to keychain"
-      echo "only — you'll need to add 'ssh-passphrase' to that item manually."
-    fi
+    ssh-keygen -p -N "$pass" -P "" -f "$key_path" >/dev/null
+    save_pass_to_1password "$pass_title" "$key_name" "$pass" \
+      || echo "WARNING: could not save '$pass_title' to 1Password."
   else
-    echo "✓ $op_item has a stored passphrase"
+    echo "✓ passphrase available for $key_name"
   fi
 
   # Prime Apple Keychain so future ssh-add calls don't need 1Password.
@@ -127,7 +169,7 @@ ensure_passphrase() {
   DISPLAY=:0 SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
     ssh-add --apple-use-keychain "$key_path" </dev/null
   rm -f "$askpass"
-  echo "✓ $key_name primed in Apple Keychain and loaded into ssh-agent"
+  echo "✓ $key_name loaded into ssh-agent"
 }
 
 for entry in "${KEYS[@]}"; do
@@ -161,13 +203,17 @@ KEY_LINES=""
 for entry in "${KEYS[@]}"; do
   key_name="${entry%%|*}"
   op_item="${entry##*|}"
-  KEY_LINES+="add_key \"\$HOME/.ssh/$key_name\" \"op://$VAULT/$op_item/ssh-passphrase\""$'\n'
+  pass_title=$(passphrase_item_title "$op_item")
+  KEY_LINES+="add_key \"\$HOME/.ssh/$key_name\" \"op://$VAULT/$pass_title/password\""$'\n'
 done
 
-# awk does the substitution cleanly regardless of special chars in KEY_LINES.
-awk -v repl="$KEY_LINES" '
-  { gsub(/__KEY_LINES__/, repl); print }
-' "$SCRIPT_DIR/ssh_unlock.sh.template" >"$UNLOCK_SCRIPT"
+# Python does the substitution cleanly regardless of special chars or
+# newlines in KEY_LINES. awk -v mangles embedded newlines.
+python3 -c '
+import sys
+template = open(sys.argv[1]).read()
+sys.stdout.write(template.replace("__KEY_LINES__", sys.argv[2]))
+' "$SCRIPT_DIR/ssh_unlock.sh.template" "$KEY_LINES" >"$UNLOCK_SCRIPT"
 chmod 700 "$UNLOCK_SCRIPT"
 echo "✓ Installed $UNLOCK_SCRIPT"
 
