@@ -3,4 +3,4 @@
     email = __WORK_EMAIL__
 
 [core]
-    sshCommand = "ssh -i ~/Library/Group\\ Containers/2BUA8C4S2C.com.1password/t/agent.sock -o IdentitiesOnly=yes"
+    sshCommand = ssh -o IdentitiesOnly=yes
