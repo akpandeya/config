@@ -131,17 +131,42 @@ echo "=== Installing Jarvis ==="
 echo
 
 JARVIS_DIR="$HOME/code/personal/jarvis"
-if [ -d "$JARVIS_DIR" ]; then
-    echo "Installing jarvis from $JARVIS_DIR..."
-    uv pip install -e "$JARVIS_DIR"
+
+if [ "${SKIP_JARVIS:-0}" = "1" ]; then
+    echo "SKIP_JARVIS=1 — skipping Jarvis install."
+else
+    if [ ! -d "$JARVIS_DIR" ]; then
+        echo "Cloning jarvis..."
+        git clone git@github.com-personal:akpandeya/jarvis.git "$JARVIS_DIR"
+    fi
+
+    echo "Building frontend + installing jarvis..."
+    # `make install` handles: npm ci + frontend build, uv build wheel,
+    # uv tool install, and registering the repo path at ~/.jarvis/repo_path.
+    (cd "$JARVIS_DIR" && make install)
+
+    # jarvis init is safe to re-run — creates config + db if absent.
     jarvis init
+
+    if [ "${SKIP_SCHEDULES:-0}" = "1" ]; then
+        echo "SKIP_SCHEDULES=1 — skipping launchd agents."
+    else
+        echo "Installing launchd agents..."
+        jarvis schedule install            # ingest every 15 min
+        jarvis schedule-pr-refresh install # hourly PR refresh 09–17
+        jarvis schedule-menubar install    # persistent menubar icon
+    fi
+
+    # Merge the Claude Code PostToolUse hook fragment into settings.json.
+    # Idempotent; preserves every other top-level key.
+    if [ -f "$REPO_DIR/scripts/merge-claude-hooks.py" ]; then
+        python3 "$REPO_DIR/scripts/merge-claude-hooks.py"
+    fi
+
     echo "✓ Jarvis installed and initialised"
     echo "  Edit ~/.jarvis/config.toml to configure integrations"
     echo "  Set work_domains under [thunderbird] to label your work emails"
     echo "  Add Firefox profile labels under [[firefox.profiles]] if desired"
-else
-    echo "⚠ Jarvis not found at $JARVIS_DIR — clone it first, then re-run this section"
-    echo "  git clone git@github.com-personal:akpandeya/jarvis.git $JARVIS_DIR"
 fi
 
 echo
