@@ -38,9 +38,19 @@ fi
 
 ACCOUNT="$("$SCRIPT_DIR/gh-account-for-cwd.sh")"
 if [ -n "$ACCOUNT" ]; then
-    # Switch gh's active account so `gh pr create` uses the right token
-    # without requiring a per-command env var (saves a keychain lookup).
-    gh auth switch --user "$ACCOUNT" >/dev/null 2>&1 || true
+    # Switch gh's active account so `gh pr create` uses the right
+    # token without requiring a per-command env var (saves a keychain
+    # lookup). Log what we switched from → to, so if a PR does end up
+    # opened as the wrong identity the trail is visible in the
+    # script's stderr capture.
+    PREV_ACCOUNT="$(gh api user --jq .login 2>/dev/null || echo '(unknown)')"
+    if [ "$PREV_ACCOUNT" != "$ACCOUNT" ]; then
+        echo "pr-create: switching gh account $PREV_ACCOUNT -> $ACCOUNT (cwd=$PWD)" >&2
+        gh auth switch --user "$ACCOUNT" >/dev/null 2>&1 || {
+            echo "pr-create: gh auth switch failed (is $ACCOUNT authed? run 'gh auth login --user $ACCOUNT')" >&2
+            exit 2
+        }
+    fi
 fi
 
 # Push the branch (idempotent — sets upstream on first push).
