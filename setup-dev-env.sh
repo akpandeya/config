@@ -123,6 +123,20 @@ for agent in ci-observer.md ci-fixer.md; do
                 "$HOME/.claude/agents/$agent"
 done
 
+# Per-scope git identity + SSH signing keys. Relies on the top-level
+# ~/.gitconfig already having:
+#   [includeIf "gitdir:~/code/personal/"] path = ~/.gitconfig-personal
+#   [includeIf "gitdir:~/code/work/"]     path = ~/.gitconfig-work
+#   [gpg] format = ssh
+#   [commit] gpgsign = true
+# We symlink the repo's scoped files in and leave the top-level
+# ~/.gitconfig alone — too machine-specific to manage centrally
+# (credential helpers, core.editor, includeIf paths differ per host).
+# Key paths are absolute under $HOME so they resolve on any Mac that
+# has id_asus_fedora + id_hf_thinkpad laid out under ~/.ssh.
+link_config "$REPO_DIR/gitconfig/private/.gitconfig" "$HOME/.gitconfig-personal"
+link_config "$REPO_DIR/gitconfig/work/.gitconfig"    "$HOME/.gitconfig-work"
+
 if ! grep -q 'starship init zsh' "$HOME/.zshrc" 2>/dev/null; then
     printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
     echo "✓ Added starship init to ~/.zshrc"

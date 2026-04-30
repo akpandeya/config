@@ -1,6 +1,7 @@
 [user]
-  email = akpandeya1@gmail.com
-  signingkey = 6A40D13BBB936F443084E8C9292E4F983136B86
-[gpg]
-  format = openpgp
-  
+    name = Avanindra Pandeya
+    email = akpandeya1@gmail.com
+    # Sign personal commits with the personal SSH key. GitHub verifies
+    # the signature against the same public key it uses for push auth,
+    # so no extra setup on github.com.
+    signingkey = /Users/avanindra.pandeya/.ssh/id_asus_fedora

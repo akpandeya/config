@@ -1,0 +1,6 @@
+[user]
+    name = Avanindra Pandeya
+    email = avanindra.pandeya@hellofresh.de
+    # Sign work commits with the HF SSH key so GitHub attributes
+    # them to the work account.
+    signingkey = /Users/avanindra.pandeya/.ssh/id_hf_thinkpad
