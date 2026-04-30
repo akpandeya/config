@@ -23,7 +23,3 @@ Script behaviour:
 
 Relay the script's output verbatim to the user — no extra commentary
 beyond ≤20 words.
-
-> Future: when Jarvis' UI grows a "ready-to-merge" inbox, the work
-> branch should post a toast there instead of a terminal nudge. For
-> now, terminal bell is the notification channel.

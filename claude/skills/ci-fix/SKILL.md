@@ -11,11 +11,12 @@ Delegate immediately to the `ci-fixer` subagent. Do NOT attempt the
 fix in the main session — the subagent has the right tools, permission
 boundaries, and a tight token budget.
 
-`Agent(subagent_type="ci-fixer", prompt="Fix CI on PR #<n>. Log path:
-~/.jarvis/logs/pr-wait-<n>.log (if present). Investigate, reproduce,
-apply minimal fix, commit with fix(ci): prefix, push. If the failure
-is not actionable (bot asking a design question, flaky), reply on the
-PR with one short sentence and exit.")`
+`Agent(subagent_type="ci-fixer", prompt="Fix CI on PR #<n>. The
+pr-watch / pr-create skills write their observer log to
+~/.jarvis/logs/pr-wait-<n>.log — tail it if it exists. Investigate,
+reproduce, apply minimal fix, commit with fix(ci): prefix, push. If
+the failure is not actionable (bot asking a design question, flaky),
+reply on the PR with one short sentence and exit.")`
 
 When the subagent returns, surface the fix commit SHA (if any) or its
 one-line verdict to the user. Nothing more.

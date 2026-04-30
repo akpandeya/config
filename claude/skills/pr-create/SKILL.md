@@ -31,15 +31,23 @@ Write a **concise** body to `/tmp/pr-body-$(date +%s).md`. Structure:
 
 ## Test plan
 
-- [ ] `uv run pytest` passes (or equivalent)
-- [ ] manual check X
+Only list non-obvious manual checks. CI already runs tests/lint/build
+on every push, so lines like `[ ] uv run pytest` or `[ ] ruff clean`
+are noise — drop them. Use this section for things a reviewer or the
+user actually has to do themselves (e.g. "click Re-auth in Settings
+and confirm the terminal window spawns").
+
+If the PR's behaviour is entirely caught by CI, omit the Test plan
+section entirely.
 ```
 
 Do NOT include:
 - Emojis (unless the user asked for them)
 - Every modified filename
 - Detailed changelog; the commit message carries that
-- "Generated with Claude Code" footers
+
+DO include the `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
+footer — the user has asked for it to stay, helps track attribution.
 
 Keep it under ~150 words.
 

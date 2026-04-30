@@ -20,39 +20,56 @@ check(s) failed.
    now. If the log is stale and everything is green, reply
    `"No fix needed: CI is already green."` and stop.
 
-2. **Check out the branch** locally:
+2. **Resolve the right gh account for this repo** and switch before
+   any `gh`/`git` write:
+
+   ```
+   account=$(~/code/personal/config/claude/scripts/gh-account-for-cwd.sh)
+   gh auth switch --user "$account"
+   ```
+
+   Without this, `gh pr checkout`, `gh pr comment`, and `git push`
+   can all end up pointed at whichever login was last active in the
+   shell. See also `gh-account-for-cwd.sh` / `repo-scope-for-cwd.sh`
+   under `config/claude/scripts/`.
+
+3. **Check out the branch**:
+
    ```
    gh pr checkout <n>
    ```
-   If the worktree is dirty or you can't check out, stop with
+
+   If the worktree is dirty or checkout fails, stop with
    `"Cannot fix: local worktree dirty / checkout failed."`.
 
-3. **Reproduce** the failure. Common recipes:
-   - Test failure → `uv run pytest <path> -x` (or `npm test` for
-     frontend).
-   - Lint → `uv run ruff check .` / `uv run ruff format --check .`.
-   - Type check → `cd frontend && npx tsc --noEmit`.
-   - Secret scan → re-read gitleaks output in the log; if it's a
-     fixture or test string, add a `# gitleaks:allow` comment or
-     rename the variable.
-   - Frontend build → `make web-build`.
+4. **Reproduce** the failure. Use the repo's CLAUDE.md or Makefile
+   as the source of truth for test/lint commands — recipes differ
+   per project and hardcoding a Python/npm list here goes stale.
 
-4. **Apply the smallest fix**. Do not refactor, do not rename unrelated
-   things, do not bump versions — that's jarvis-release's job.
+   If the failing check is a secret scan and the hit is a test
+   fixture or docs example, add a `# gitleaks:allow` comment or
+   rename the variable rather than editing history.
 
-5. **Commit**:
+5. **Apply the smallest fix**. Do not refactor, do not rename
+   unrelated things, do not bump versions — that's `jarvis-release`'s
+   job (in the jarvis repo) or out of scope entirely elsewhere.
+
+6. **Commit**:
+
    ```
    git add -u <specific files>
    git commit -m "fix(ci): <one-line description>"
    ```
+
    Do not use `--amend`. Do not use `--no-verify`.
 
-6. **Push**:
+7. **Push**:
+
    ```
    git push
    ```
 
-7. **Report**. One sentence, e.g.
+8. **Report**. One sentence, e.g.
    `"Fixed test_foo.py locale assumption. Pushed abc1234."` or
    `"Not fixable: flaky network test in tests/test_integration.py."`.
 
@@ -61,11 +78,16 @@ check(s) failed.
 - One commit per invocation. If the first push fails CI too, **stop** —
   do not chase.
 - Never force-push, never rewrite history, never `--no-verify`.
+- Never swap `gh` account without logging what you switched from/to —
+  the user has separate personal + work logins, and silent
+  account-switching breaks audit trails.
 - If a bot comment is asking a design question (e.g. a reviewer bot
   saying "this function is too long"), post a terse reply on the PR
   rather than trying to refactor:
+
   ```
   gh pr comment <n> --body "Noted — will address in a follow-up."
   ```
+
   And exit.
 - Token budget for your final message back to the parent: ≤30 words.
