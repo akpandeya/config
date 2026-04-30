@@ -111,6 +111,18 @@ link_config "$REPO_DIR/claude/skills/jarvis-suggest/SKILL.md" \
 link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
             "$HOME/.claude/skills/slack-catchup/SKILL.md"
 
+# Generic PR / CI automation skills + their subagents. Keep the whole
+# skill directory symlinked (not just SKILL.md) in case a skill grows
+# scripts or reference docs alongside its entry point.
+for skill in pr-create pr-watch pr-merge ci-fix; do
+    link_config "$REPO_DIR/claude/skills/$skill" \
+                "$HOME/.claude/skills/$skill"
+done
+for agent in ci-observer.md ci-fixer.md; do
+    link_config "$REPO_DIR/claude/agents/$agent" \
+                "$HOME/.claude/agents/$agent"
+done
+
 if ! grep -q 'starship init zsh' "$HOME/.zshrc" 2>/dev/null; then
     printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
     echo "✓ Added starship init to ~/.zshrc"
