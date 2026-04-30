@@ -53,10 +53,15 @@ Keep it under ~150 words.
 
 ## Open the PR
 
-!`~/code/personal/config/claude/scripts/pr-create.sh --title "<title>" --body-file <body-file>`
+Call the script yourself via the Bash tool. Do NOT paste a literal
+`<title>` / `<body-file>` — substitute the real values first. The
+shape is:
 
-Replace `<title>` with a matching imperative title under 70 chars, and
-`<body-file>` with the path you just wrote.
+```
+~/code/personal/config/claude/scripts/pr-create.sh \
+    --title "feat(x): ..." \
+    --body-file /tmp/pr-body-1234567890.md
+```
 
 Parse `PR_URL=…` and `PR_NUMBER=…` from stdout.
 
