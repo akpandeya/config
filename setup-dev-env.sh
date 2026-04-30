@@ -123,19 +123,65 @@ for agent in ci-observer.md ci-fixer.md; do
                 "$HOME/.claude/agents/$agent"
 done
 
-# Per-scope git identity + SSH signing keys. Relies on the top-level
-# ~/.gitconfig already having:
-#   [includeIf "gitdir:~/code/personal/"] path = ~/.gitconfig-personal
-#   [includeIf "gitdir:~/code/work/"]     path = ~/.gitconfig-work
-#   [gpg] format = ssh
-#   [commit] gpgsign = true
-# We symlink the repo's scoped files in and leave the top-level
-# ~/.gitconfig alone — too machine-specific to manage centrally
-# (credential helpers, core.editor, includeIf paths differ per host).
-# Key paths are absolute under $HOME so they resolve on any Mac that
-# has id_asus_fedora + id_hf_thinkpad laid out under ~/.ssh.
+# Per-scope git identity + SSH signing keys. Symlink the repo's
+# scoped files in as ~/.gitconfig-{personal,work}; they're pulled in
+# by the includeIf blocks set below on the top-level ~/.gitconfig.
 link_config "$REPO_DIR/gitconfig/private/.gitconfig" "$HOME/.gitconfig-personal"
 link_config "$REPO_DIR/gitconfig/work/.gitconfig"    "$HOME/.gitconfig-work"
+
+# Top-level ~/.gitconfig setup. Uses `git config --global` so we only
+# touch the specific keys we care about; anything else the user has
+# already set (credential helpers, aliases, core.editor) is preserved.
+# All idempotent — re-running this script leaves a correct config
+# unchanged.
+setup_git_global() {
+    # Identity: work email default (the ~/.gitconfig-work includeIf
+    # file overrides this under ~/code/work/ anyway, but having a
+    # sensible default avoids "Please tell me who you are" on fresh
+    # clones outside that tree).
+    git config --global user.name  "Avanindra Pandeya"
+    git config --global user.email "avanindra.pandeya@hellofresh.de"
+
+    # SSH signing. `gpg.ssh.program` is intentionally NOT set — the
+    # default (system ssh-keygen) reads the on-disk private key
+    # directly. Routing through 1Password's op-ssh-sign was unstable
+    # ("failed to fill whole buffer" mid-commit), and the scoped
+    # fragments already carry absolute paths to the on-disk keys.
+    git config --global gpg.format     ssh
+    git config --global commit.gpgsign true
+    # If somebody previously set the 1Password helper, unset it.
+    git config --global --unset-all gpg.ssh.program 2>/dev/null || true
+    # Fall-back signing key (personal). Overridden by the
+    # includeIf'd scope files under ~/code/{personal,work}/.
+    git config --global user.signingkey "$HOME/.ssh/id_asus_fedora"
+
+    # Verification: allowed_signers maps emails to pubkeys so
+    # `git log --show-signature` actually verifies locally.
+    mkdir -p "$HOME/.config/git"
+    local signers="$HOME/.config/git/allowed_signers"
+    {
+        [ -f "$HOME/.ssh/id_asus_fedora.pub" ] && \
+            echo "akpandeya1@gmail.com $(cat "$HOME/.ssh/id_asus_fedora.pub")"
+        [ -f "$HOME/.ssh/id_hf_thinkpad.pub" ] && \
+            echo "avanindra.pandeya@hellofresh.de $(cat "$HOME/.ssh/id_hf_thinkpad.pub")"
+    } > "$signers"
+    git config --global gpg.ssh.allowedSignersFile "$signers"
+
+    # includeIf: point each scope at its fragment. Set-path'd
+    # absolutely so `git config` handles canonicalisation.
+    git config --global 'includeIf.gitdir:~/code/personal/.path' \
+        "$HOME/.gitconfig-personal"
+    git config --global 'includeIf.gitdir:~/code/work/.path' \
+        "$HOME/.gitconfig-work"
+
+    # Sane defaults (init branch, push behaviour).
+    git config --global init.defaultBranch main
+    git config --global push.default          current
+    git config --global push.autoSetupRemote  true
+    git config --global pull.rebase           false
+}
+setup_git_global
+echo "✓ ~/.gitconfig signing + includeIf set (personal + work)"
 
 if ! grep -q 'starship init zsh' "$HOME/.zshrc" 2>/dev/null; then
     printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
