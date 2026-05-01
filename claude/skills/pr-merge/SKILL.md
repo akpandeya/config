@@ -7,9 +7,16 @@ allowed-tools: Bash
 The user wants to merge a PR. Extract the PR number from their
 message; if ambiguous, ask.
 
-Delegate to the scope-aware script:
+Delegate to the scope-aware script via the Bash tool, substituting
+the real PR number — e.g. for PR 337:
 
-!`~/code/personal/config/claude/scripts/pr-merge.sh <pr-number>`
+```
+~/code/personal/config/claude/scripts/pr-merge.sh 337
+```
+
+Do **not** use a `!` preamble or leave literal `<pr-number>` in the
+command — the harness expands `<…>` via the shell and fails with a
+parse error before the script runs.
 
 Script behaviour:
 
