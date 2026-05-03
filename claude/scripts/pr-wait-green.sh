@@ -59,15 +59,15 @@ while :; do
 
     # Check state. Missing PR / gh error → log and keep going unless
     # it's been going on for several ticks.
-    if ! checks_json="$(gh pr checks "$PR" --json name,state,conclusion,link 2>/dev/null)"; then
+    if ! checks_json="$(gh pr checks "$PR" --json name,state,link 2>/dev/null)"; then
         emit "$ts pr=$PR state=UNKNOWN error=gh_checks_failed"
         sleep "$INTERVAL"
         continue
     fi
 
     total="$(echo "$checks_json" | jq 'length')"
-    passed="$(echo "$checks_json" | jq '[.[] | select(.state=="SUCCESS" or .conclusion=="SUCCESS")] | length')"
-    failing="$(echo "$checks_json" | jq -r '[.[] | select(.state=="FAILURE" or .conclusion=="FAILURE")] | map(.name) | join(",")')"
+    passed="$(echo "$checks_json" | jq '[.[] | select(.state=="SUCCESS")] | length')"
+    failing="$(echo "$checks_json" | jq -r '[.[] | select(.state=="FAILURE")] | map(.name) | join(",")')"
     pending="$(echo "$checks_json" | jq -r '[.[] | select(.state=="IN_PROGRESS" or .state=="PENDING" or .state=="QUEUED")] | length')"
 
     if [ "$total" -gt 0 ] && [ -n "$failing" ]; then

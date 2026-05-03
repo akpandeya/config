@@ -16,13 +16,17 @@ You'll be given a PR number and a log path (default
 
 ## Loop
 
-1. Start the poller in the background:
+1. Start the poller detached so it outlives this agent invocation
+   (a bare `run_in_background=true` would die when the sub-agent exits):
 
    ```
-   ~/code/personal/config/claude/scripts/pr-wait-green.sh <pr> --log <log> --interval 60
+   nohup ~/code/personal/config/claude/scripts/pr-wait-green.sh <pr> --log <log> --interval 60 >/dev/null 2>&1 </dev/null &
+   disown
    ```
 
-   Run it with `run_in_background=true`. Do not wait for it.
+   Run the wrapped command with `run_in_background=true`. Do not wait for it.
+
+   Before starting a fresh poller, check `ps aux | grep pr-wait-green | grep pr=<n>` and reuse an existing one if found. If no log exists yet, give the poller ~5s to produce its first tick before reading.
 
 2. Every time you're resumed, `Read` the tail of the log (last 40
    lines). Look for the latest status line and any `EVENT …` lines
