@@ -2,7 +2,10 @@
 # Create a PR from the current branch using the account resolved from $PWD.
 #
 # Usage:
-#   pr-create.sh --title "feat: …" --body-file /tmp/body.md [--draft] [--base main]
+#   pr-create.sh --title "feat: …" --body-file /tmp/body.md [--draft] [--base <branch>]
+#
+# --base defaults to the remote's HEAD (origin/HEAD), discovered via
+# git symbolic-ref, `git remote set-head --auto`, then `gh repo view`.
 #
 # Exits non-zero on any surprise (on main, no upstream configured but push
 # fails, gh create fails). Prints `PR_URL=<url>\nPR_NUMBER=<n>` on success.
@@ -13,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TITLE=""
 BODY_FILE=""
-BASE="main"
+BASE=""
 DRAFT=""
 
 while [ $# -gt 0 ]; do
@@ -31,6 +34,25 @@ done
 [ -f "$BODY_FILE" ] || { echo "Body file not found: $BODY_FILE" >&2; exit 2; }
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# Resolve base from the remote's HEAD if the caller didn't pass --base.
+# Falls back through a few discovery paths so we don't hardcode main/master.
+if [ -z "$BASE" ]; then
+    BASE="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    if [ -z "$BASE" ]; then
+        # Ask the remote directly, then cache the symref locally.
+        git remote set-head origin --auto >/dev/null 2>&1 || true
+        BASE="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    fi
+    if [ -z "$BASE" ]; then
+        BASE="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)"
+    fi
+    if [ -z "$BASE" ]; then
+        echo "pr-create: could not detect default branch; pass --base explicitly." >&2
+        exit 2
+    fi
+fi
+
 if [ "$BRANCH" = "$BASE" ] || [ "$BRANCH" = "HEAD" ]; then
     echo "Refusing to create a PR from $BRANCH (need a feature branch)." >&2
     exit 2
