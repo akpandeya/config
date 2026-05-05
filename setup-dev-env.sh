@@ -114,7 +114,7 @@ link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
 # Generic PR / CI automation skills + their subagents. Keep the whole
 # skill directory symlinked (not just SKILL.md) in case a skill grows
 # scripts or reference docs alongside its entry point.
-for skill in pr-create pr-watch pr-merge ci-fix; do
+for skill in pr-create pr-watch pr-merge ci-fix desloppify; do
     link_config "$REPO_DIR/claude/skills/$skill" \
                 "$HOME/.claude/skills/$skill"
 done
@@ -196,6 +196,25 @@ if ! grep -qF "$REPO_DIR/shell/aliases.sh" "$HOME/.zshrc" 2>/dev/null; then
     echo "✓ Added shared aliases source to ~/.zshrc"
 else
     echo "✓ shared aliases already sourced in ~/.zshrc"
+fi
+
+echo
+echo "=== Installing desloppify ==="
+echo
+
+# Codebase health scanner used by Claude Code. The skill itself is
+# already symlinked above; this just makes the `desloppify` CLI
+# available globally via uv's tool dir (~/.local/bin). `uv tool install
+# --upgrade` is a no-op when the version already matches, so re-running
+# this script is cheap.
+if [ "${SKIP_DESLOPPIFY:-0}" = "1" ]; then
+    echo "SKIP_DESLOPPIFY=1 — skipping desloppify install."
+else
+    uv tool install --upgrade "desloppify[full]"
+    echo "✓ desloppify CLI installed (skill is symlinked under ~/.claude/skills/desloppify)"
+    echo "  When desloppify ships a new SKILL.md (e.g. v6 → v7), refresh it with:"
+    echo "    cd $REPO_DIR && desloppify update-skill claude"
+    echo "    git -C $REPO_DIR add claude/skills/desloppify/SKILL.md && git -C $REPO_DIR commit -m 'chore: bump desloppify skill'"
 fi
 
 echo
