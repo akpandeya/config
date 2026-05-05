@@ -123,6 +123,18 @@ while :; do
         exit 0
     fi
 
+    # Hard-fail on FAILING once nothing is still pending — that means
+    # CI has settled red and isn't going to flip on its own. (Transient
+    # FAILING-with-pending-jobs keeps polling: a slow job might still
+    # turn the run green overall, e.g. a flake on the failing job
+    # gets retried by another workflow.) A push that reruns CI has to
+    # spawn a fresh observer; an old observer whose log claims red
+    # shouldn't silently flip green if the author force-pushes.
+    if [ "$state" = "FAILING" ] && [ "$pending" -eq 0 ]; then
+        emit "EVENT red pr=$PR failing=${failing}"
+        exit 2
+    fi
+
     if [ "$MAX_TICKS" -gt 0 ] && [ "$tick" -ge "$MAX_TICKS" ]; then
         emit "EVENT timeout ticks=$tick"
         exit 1

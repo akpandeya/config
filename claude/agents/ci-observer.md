@@ -18,8 +18,9 @@ You'll be given a PR number and (optionally) a log path. Default log:
 
 **Run the poller in the foreground of your single Bash call and let it
 block.** `pr-wait-green.sh` polls every 60s internally and exits only
-on a terminal state (green → exit 0, timeout → exit 1). Do **not**
-detach it with `nohup &` — the parent spawned *you* with
+on a terminal state: green → exit 0, settled red → exit 2, timeout →
+exit 1. Do **not** detach it with `nohup &` — the parent spawned *you*
+with
 `run_in_background=true` precisely so you can block here without
 stalling the user's session.
 
@@ -49,9 +50,10 @@ Ring the terminal bell once (`printf '\a'`). Do **not** merge —
 `pr-merge` is responsible for that (it respects personal-vs-work
 policy). Stop.
 
-Exit non-zero → either hard cap hit or terminal failure. Read the
-last 40 lines of the log. If you see `FAILING` or actionable bot
-comments, delegate *once* to `ci-fixer`:
+Exit 2 → CI settled red (no jobs still pending). Read the last 40
+lines of the log; pull the failing job names from the most recent
+`EVENT red` line and the failure detail from earlier ticks. Delegate
+*once* to `ci-fixer`:
 
     Agent(subagent_type="ci-fixer",
           prompt="Fix CI on PR #<n>. Log tail: <last 20 lines>. One attempt only.")
