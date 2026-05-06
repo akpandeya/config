@@ -51,7 +51,8 @@ BASE="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | 
 git checkout "$BASE" && git pull && git checkout -b <prefix>/<short-slug>
 ```
 
-Use `feat/`, `fix/`, `chore/` prefixes as appropriate.
+- **Personal:** use `feat/`, `fix/`, `chore/` prefixes as appropriate.
+- **Work:** use `feature/<JIRA-KEY>-<short-slug>` or `patch/<JIRA-KEY>-<short-slug>` (feature for new functionality, patch for fixes).
 
 ## Step 5 — Implement
 
