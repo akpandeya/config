@@ -17,17 +17,9 @@ Skip anything without `groomed` — that's user grooming work, not autonomous-mo
 Once you have the list, **announce it on Matrix before touching any code**:
 
 ```bash
-uv run python <<'PY'
-from jarvis.bridge import BridgeEvent, configure_default_matrix, default_router
-from jarvis.config import JarvisConfig
-configure_default_matrix(JarvisConfig.load())
-default_router().send(BridgeEvent(
-    kind="autonomous.start",
-    scope="personal",
-    title="Autonomous run starting — <N> issues queued",
-    body="<bulleted list: #N <title> for each issue collected, no URLs>",
-))
-PY
+jarvis bridge send --scope personal --kind manual \
+  --title "Autonomous run starting — <N> issues queued" \
+  --body "<bulleted list: #N <title> for each issue collected, no URLs>"
 ```
 
 Then work through each issue in order:
@@ -35,17 +27,9 @@ Then work through each issue in order:
 0. **Ping Matrix** — issue URL and title so it's tappable:
 
    ```bash
-   uv run python <<'PY'
-   from jarvis.bridge import BridgeEvent, configure_default_matrix, default_router
-   from jarvis.config import JarvisConfig
-   configure_default_matrix(JarvisConfig.load())
-   default_router().send(BridgeEvent(
-       kind="autonomous.issue_start",
-       scope="personal",
-       title="Starting: <issue title>",
-       body="<https://github.com/owner/repo/issues/N>",
-   ))
-   PY
+   jarvis bridge send --scope personal --kind manual \
+     --title "Starting: <issue title>" \
+     --body "<https://github.com/owner/repo/issues/N>"
    ```
 1. `gh issue view <n>` — read it including the `Blocked by:` line.
 2. Branch from fresh `main`: `git checkout main && git pull && git checkout -b <prefix>/<short-slug>` (`feat/`, `fix/`, etc.).
@@ -57,17 +41,9 @@ Then work through each issue in order:
 8. **After merge: ping Matrix** with PR link and title:
 
    ```bash
-   uv run python <<'PY'
-   from jarvis.bridge import BridgeEvent, configure_default_matrix, default_router
-   from jarvis.config import JarvisConfig
-   configure_default_matrix(JarvisConfig.load())
-   default_router().send(BridgeEvent(
-       kind="autonomous.progress",
-       scope="personal",
-       title="Merged: <PR title>",
-       body="<PR URL>  ·  Closes #<n>",
-   ))
-   PY
+   jarvis bridge send --scope personal --kind autonomous.progress \
+     --title "Merged: <PR title>" \
+     --body "<PR URL>  ·  Closes #<n>"
    ```
 9. Loop to the next issue in the batch.
 
@@ -81,15 +57,9 @@ Then work through each issue in order:
 **Final Matrix summary** (send when stopping for any reason):
 
 ```bash
-uv run python <<'PY'
-from jarvis.bridge import BridgeEvent, configure_default_matrix, default_router
-from jarvis.config import JarvisConfig
-configure_default_matrix(JarvisConfig.load())
-default_router().send(BridgeEvent(
-    kind="autonomous.done",
-    scope="personal",
-    title="Autonomous run done — <N> merged (up to 5)",
-    body="""
+jarvis bridge send --scope personal --kind autonomous.progress \
+  --title "Autonomous run done — <N> merged (up to 5)" \
+  --body "$(cat <<'MSG'
 **What changed:**
 <1–2 sentences per merged issue: what is functionally different in the codebase, no PR links or issue numbers>
 
@@ -97,9 +67,8 @@ default_router().send(BridgeEvent(
 - <bullet per key scenario a human should smoke-test manually>
 
 **Skipped:** <#N — reason> (omit this section if nothing was skipped)
-""",
-))
-PY
+MSG
+)"
 ```
 
 **Repo rules to honor without prompting:**
