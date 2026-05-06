@@ -96,10 +96,8 @@ jarvis bridge send --scope "$SCOPE" --kind pr_ci_red \
 
 ## Step 9 — Human review comments
 
-**Never reply directly to human PR comments** (personal or work). Instead:
-
-- Read all comments; compose a draft response and/or action list for each.
-- Send the drafts via bridge and wait for the human to act:
+- **Personal:** treat comments as input — implement the fix directly, or draft a reply if clarification is needed before acting.
+- **Work:** never reply directly to PR comments. Read all comments, compose a draft response and/or action list for each, and send via bridge so the human can post it:
 
 ```bash
 jarvis bridge send --scope "$SCOPE" --kind manual \
@@ -107,7 +105,7 @@ jarvis bridge send --scope "$SCOPE" --kind manual \
   --body "<drafted responses and action items per comment>"
 ```
 
-- For actionable feedback: implement the fix, push, then notify again.
+For actionable feedback on either profile: implement the fix, push, then notify again.
 
 ## Step 10 — Done
 
@@ -130,4 +128,4 @@ jarvis bridge send --scope work --kind manual \
 **Hard rules:**
 - Never push directly to the default branch.
 - No `--no-verify`, no force-push.
-- Never post replies to human PR comments — compose drafts and notify only.
+- Work only: never post replies to human PR comments — compose drafts and notify via bridge.
