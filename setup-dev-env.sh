@@ -114,9 +114,19 @@ link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
 # Generic PR / CI automation skills + their subagents. Keep the whole
 # skill directory symlinked (not just SKILL.md) in case a skill grows
 # scripts or reference docs alongside its entry point.
-for skill in pr-create pr-watch pr-merge ci-fix desloppify; do
+for skill in pr-create pr-watch pr-merge ci-fix desloppify prompt; do
     link_config "$REPO_DIR/claude/skills/$skill" \
                 "$HOME/.claude/skills/$skill"
+done
+
+# Long-form prompts paste into fresh Claude sessions. Source of truth
+# lives in claude/prompts/; symlink each *.md into ~/.claude/prompts/
+# so the `prompt` skill can list and inject them.
+for prompt_file in "$REPO_DIR"/claude/prompts/*.md; do
+    [ -e "$prompt_file" ] || continue
+    [ "$(basename "$prompt_file")" = "README.md" ] && continue
+    link_config "$prompt_file" \
+                "$HOME/.claude/prompts/$(basename "$prompt_file")"
 done
 for agent in ci-observer.md ci-fixer.md; do
     link_config "$REPO_DIR/claude/agents/$agent" \
