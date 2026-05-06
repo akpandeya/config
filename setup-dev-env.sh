@@ -26,11 +26,11 @@ if [ -f "brew-packages.txt" ]; then
         # Skip comments and empty lines
         [[ "$package" =~ ^#.*$ ]] || [[ -z "$package" ]] && continue
 
-        if brew list "$package" &>/dev/null; then
+        if brew list "$package" &>/dev/null || brew list --cask "$package" &>/dev/null; then
             echo "✓ $package already installed"
         else
             echo "Installing $package..."
-            if [[ "$package" == font-* ]]; then
+            if brew info --cask "$package" &>/dev/null; then
                 brew install --cask "$package"
             else
                 brew install "$package"
