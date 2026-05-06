@@ -1,5 +1,3 @@
-# Backlog grooming — Round 1: per-issue clarification
-
 You are grooming the backlog one issue at a time. Goal: make every open issue autonomous-Claude-ready — a fresh Claude session with only the issue body + repo access should be able to implement it without asking follow-ups.
 
 Source of truth: read CLAUDE.md first (esp. the backlog/roadmap section). Issues are the backlog, not docs.

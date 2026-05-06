@@ -1,11 +1,3 @@
-# Backlog grooming — Round 2: cross-link audit
-
-Paste into a fresh Claude Code session at the repo root, **after** Round 1 (`backlog-grooming-round-1.md`) has run on the open backlog. Round 1 made each issue self-contained; Round 2 makes the *graph* correct.
-
-Conventions (jarvis-specific): tiers `S/A/B/C/D`, `Blocked by: #N, #M` as the first line of each body.
-
----
-
 Round 2: cross-link audit on the groomed backlog. Round 1 made each issue self-contained; now make the *graph* correct.
 
 Workflow:
