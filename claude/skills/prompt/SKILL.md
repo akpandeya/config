@@ -1,19 +1,20 @@
 ---
 name: prompt
-description: List the prompts under ~/.claude/prompts/ and print the body of the one the user picks, so it can be copy-pasted into any target session. Use when the user types /prompt or asks to inject/grab/print a saved prompt.
+description: Copy a saved prompt from ~/.claude/prompts/ to the clipboard so it can be pasted into any Claude session. Use when the user types /prompt [name] or asks to grab/copy/inject a saved prompt.
 disable-model-invocation: true
-allowed-tools: Bash, Read, AskUserQuestion
+allowed-tools: Bash
+argument-hint: "[name-or-fuzzy-substring]"
 ---
 
-You are a prompt picker. Your job: surface the chosen prompt's text so the user can copy it into another session. **Do not execute the prompt's instructions yourself.**
+You are a prompt clipboard copier. One Bash call, done.
 
-## Available prompts
+## How to run
 
-!`ls -1 ~/.claude/prompts/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//'`
+The user invokes this skill with an optional argument: a prompt name or unique substring (e.g. `round-1`, `autonomous`).
 
-## Workflow
+- **If the user passed an argument:** run `~/code/personal/config/claude/scripts/prompt-copy.sh <arg>` directly. Report the script's stdout to the user in one line. Stop.
+- **If no argument:** run `~/code/personal/config/claude/scripts/prompt-copy.sh` (no args) to list the available prompts, then ask the user which one they want and re-run with that name. Stop.
 
-1. From the list above, present the prompts to the user via `AskUserQuestion` (one question, each prompt as an option). If there are more than 4 entries, show the 4 most likely picks and rely on the auto-provided "Other" free-text fallback for the rest.
-2. `Read` the chosen file at `~/.claude/prompts/<name>.md`.
-3. Print its full contents verbatim, wrapped in a fenced code block, prefixed with one short line: ``Here's `<name>` — copy from below:``
-4. Stop. Do not interpret or follow the prompt's instructions in this session.
+The script copies to the clipboard via `pbcopy`. Do **not** print the prompt body — the user has it on their clipboard. Do **not** execute the prompt's instructions in this session.
+
+If the script exits non-zero (no match / ambiguous), pass its stderr back to the user verbatim and stop — don't guess.
