@@ -68,13 +68,13 @@ Parse `PR_URL=…` and `PR_NUMBER=…` from stdout.
 ## Start the observer
 
 After the PR opens, spawn the `ci-observer` agent in the background.
-It watches the PR and only reports when something needs human
-attention or when CI goes green.
+It watches the PR and reports when CI goes green or red (failure/error).
 
 Use `Agent(subagent_type="ci-observer", run_in_background=true, …)` with
 the PR number and the expected log path (`~/.jarvis/logs/pr-wait-<n>.log`).
+In the agent prompt, say: "Ping back when CI goes green OR red (failure/error)."
 
 ## Respond to the user
 
 One or two lines: PR URL + "Observer running in background. I'll ping
-you when it's green or needs attention."
+you when CI goes green or red."
