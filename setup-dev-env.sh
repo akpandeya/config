@@ -26,11 +26,24 @@ if [ -f "brew-packages.txt" ]; then
         # Skip comments and empty lines
         [[ "$package" =~ ^#.*$ ]] || [[ -z "$package" ]] && continue
 
-        if brew list "$package" &>/dev/null || brew list --cask "$package" &>/dev/null; then
+        is_cask=false
+        brew info --cask "$package" &>/dev/null && is_cask=true
+
+        already_installed=false
+        if $is_cask; then
+            # brew list --cask fails for apps installed outside of brew (App Store, direct download)
+            brew list --cask "$package" &>/dev/null && already_installed=true
+            app_name="$(brew info --cask "$package" --json=v2 2>/dev/null | jq -r '.casks[0].artifacts[] | select(type=="object") | .app[]? // empty' 2>/dev/null | head -1)"
+            [ -n "$app_name" ] && [ -d "/Applications/$app_name" ] && already_installed=true
+        else
+            brew list "$package" &>/dev/null && already_installed=true
+        fi
+
+        if $already_installed; then
             echo "✓ $package already installed"
         else
             echo "Installing $package..."
-            if brew info --cask "$package" &>/dev/null; then
+            if $is_cask; then
                 brew install --cask "$package"
             else
                 brew install "$package"
