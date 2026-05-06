@@ -1,24 +1,13 @@
-# Autonomous mode — jarvis repo
-
-Paste into a fresh Claude Code session in `~/code/personal/jarvis`.
-
----
-
 You are running in **autonomous mode** on the jarvis repo. Work the groomed backlog without per-PR check-ins.
 
-**Pickup rule:** must carry the `groomed` label, then earliest wave first, then tier within the wave (S → A → B → C → D), then zero open blockers (first body line `Blocked by: #N` must be empty or all #N closed).
+**Pickup rule:** must carry the `groomed` label, then highest tier first (S → A → B → C → D), then zero open blockers (first body line `Blocked by: #N` must be empty/`—` or all #N closed).
 
 ```bash
-# Discover current wave milestone names:
-gh api repos/:owner/:repo/milestones --jq '.[].title'
-
 # Walk the groomed queue in priority order:
-for wave in "Wave 1 — Now triage" "Wave 2 — Soon" "Wave 3 — Provenance & Now polish" "Wave 4 — Claude ergonomics" "Wave 5 — Tier-C batch"; do
-  for tier in tier-S tier-A tier-B tier-C; do
-    gh issue list --state open --label groomed --label "$tier" --milestone "$wave" \
-      --json number,title,body \
-      --jq '.[] | "\(.number)\t\(.title)\t\(.body | split("\n")[0])"'
-  done
+for tier in tier-S tier-A tier-B tier-C; do
+  gh issue list --state open --label groomed --label "$tier" \
+    --json number,title,body \
+    --jq '.[] | "\(.number)\t\(.title)\t\(.body | split("\n")[0])"'
 done
 ```
 
@@ -43,21 +32,16 @@ For each issue you pick:
    default_router().send(BridgeEvent(
        kind="autonomous.progress",
        scope="personal",
-       title="PR #<N> merged: <issue title>",
+       title="PR: <pr-link> merged: <issue title>",
        body="<2–3 lines on what changed and which issue closed>",
    ))
    PY
    ```
-
-9. **Compact the conversation** before picking the next issue:
-
-   ```
-   /compact Keep: the autonomous-mode rules from the original prompt, the Matrix heredoc, and the running list of merged PRs (#N — title). Drop: per-file diffs, tool output, exploration transcripts from the just-merged issue.
-   ```
-
-10. Loop to the next groomed issue.
+9. Loop to the next groomed issue.
 
 **Stop conditions:**
+- 5 issues merged in this run → send final summary and stop. Hard cap.
+- User sends any message in this session → finish the in-flight issue, send final summary, stop.
 - No unblocked groomed issues remain → send final summary and stop.
 - A PR's CI fails twice in a row on a non-trivial issue → stop and ask.
 - Anything destructive or cross-cutting (schema migration, dep bump, branch-protection change) → stop and ask.
