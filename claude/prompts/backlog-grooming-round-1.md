@@ -5,11 +5,14 @@ Source of truth: read CLAUDE.md first (esp. the backlog/roadmap section). Issues
 Workflow — repeat until no ungroomed open issues remain:
 
 1. Pick the next open issue: highest tier, missing the `groomed` label. Use:
-     gh issue list --state open --search '-label:groomed' \
-       --json number,title,labels --limit 50
+     gh issue list --state open --json number,title,labels --limit 50 \
+       | jq '[.[] | select(.labels | map(.name) | contains(["groomed"]) | not)]'
    Show me the candidate; let me confirm or skip before you dive in.
+   If the issue's `Blocked by:` line references open issues, note it — groom the blockers first or flag for the user.
 
 2. Read the issue: `gh issue view <n>` plus all comments.
+
+2a. **Stale/duplicate check** — before investing any effort: is this issue stale, superseded, or a duplicate of something else? If yes: STOP, surface it, ask whether to close / merge / downscope. Don't auto-close. Only continue to step 3 if the issue is clearly still live.
 
 3. Read the code it touches. Use Explore subagents for anything non-trivial. Identify: which files/modules, existing utilities to reuse, related specs, prior art in git log.
 
@@ -29,9 +32,7 @@ Workflow — repeat until no ungroomed open issues remain:
      gh issue edit <n> --body-file <tmp>
      gh issue edit <n> --add-label groomed
 
-7. If during reading you discover the issue is stale, duplicate, or now irrelevant: STOP, surface it, ask whether to close / merge / downscope. Don't auto-close.
-
-8. Move to the next issue without approval. Keep going until I say stop or the queue is empty. You can continue going until you need my input.
+7. Move to the next issue without approval. Keep going until I say stop or the queue is empty. You can continue going until you need my input.
 
 Constraints:
 - Don't push commits, don't open PRs, don't change code — backlog only.

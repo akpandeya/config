@@ -1,5 +1,7 @@
 Round 2: cross-link audit on the groomed backlog. Round 1 made each issue self-contained; now make the *graph* correct.
 
+Read `CLAUDE.md` first (especially the backlog/roadmap section and the "Two-axis backlog scheme" tier rubric) before doing anything else.
+
 Workflow:
 
 1. Pull the full open backlog with bodies:
@@ -36,9 +38,9 @@ Workflow:
 
 5. Apply approved edits via `gh issue edit` / `gh issue comment` / `gh issue close --reason "not planned"`. One change at a time; no silent batch updates.
 
-6. End with a short report: edges added, edges removed, dups closed, tier reassignments applied, remaining smells you didn't auto-fix.
+6. End with a short report: edges added, edges removed, dups closed, tier reassignments applied, remaining smells you didn't auto-fix. Include a count of issues skipped because they lack the `groomed` label — if it's large, suggest running Round 1 first.
 
 Constraints:
 - Read-only on code. Backlog edits only.
 - Never close without my OK.
-- If Round 1 wasn't run on an issue (no `groomed` label), skip it and list at the end — Round 2 assumes bodies are already clean.
+- If Round 1 wasn't run on an issue (no `groomed` label), skip it — Round 2 assumes bodies are already clean.
