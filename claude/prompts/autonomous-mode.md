@@ -71,6 +71,16 @@ MSG
 )"
 ```
 
+**Substantial decisions** — before taking any action outside the normal code→PR→merge loop (creating a GH issue, closing/reopening an issue, adding/removing labels, posting a comment on an issue), send a ping **first**, then proceed:
+
+```bash
+jarvis bridge send --scope personal --kind manual \
+  --title "⚠️ Decision: <what you are about to do>" \
+  --body "Reason: <one line why>"
+```
+
+The `⚠️` prefix marks it visually distinct from progress pings. This covers anything inferred or undocumented — if the issue didn't say to do X but you're doing it anyway, ping first.
+
 **Repo rules to honor without prompting:**
 - Never push to main; PR + CI required.
 - No `--no-verify`, no force-push.

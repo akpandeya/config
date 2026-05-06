@@ -129,3 +129,9 @@ jarvis bridge send --scope work --kind manual \
 - Never push directly to the default branch.
 - No `--no-verify`, no force-push.
 - Work only: never post replies to human PR comments — compose drafts and notify via bridge.
+- Before any action outside the normal code→PR→merge loop (creating an issue, closing/labelling/commenting on an issue, any inferred undocumented action), send a decision ping **first**:
+  ```bash
+  jarvis bridge send --scope "$SCOPE" --kind manual \
+    --title "⚠️ Decision: <what you are about to do>" \
+    --body "Reason: <one line why>"
+  ```
