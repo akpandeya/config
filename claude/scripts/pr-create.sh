@@ -94,7 +94,7 @@ if [ "$SCOPE" = "work" ]; then
     jarvis bridge send \
         --scope work \
         --kind pr_ready \
-        --title "PR #${NUMBER} opened — needs human merge" \
+        --title "PR #${NUMBER} opened — needs human review" \
         --body "${TITLE}"$'\n'"${URL}" >/dev/null 2>&1 || true
 fi
 
