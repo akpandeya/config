@@ -44,17 +44,11 @@ case "$SCOPE" in
         # ring the terminal bell once so tmux/iTerm notices. Exit 1 so
         # callers don't chain a tag/push after this step.
         url="$(gh pr view "$PR" --json url --jq .url 2>/dev/null || echo "")"
-        title="$(gh pr view "$PR" --json title --jq .title 2>/dev/null || echo "")"
         printf '\a'
         cat <<EOF
 🔔 PR #$PR is green but scope=work — NOT merging automatically.
    Review and click merge yourself: $url
 EOF
-        jarvis bridge send \
-            --scope "$SCOPE" \
-            --kind manual \
-            --title "🔔 PR #${PR} ready — needs human merge" \
-            --body "${title}"$'\n'"${url}" 2>/dev/null || true
         exit 1
         ;;
     *)

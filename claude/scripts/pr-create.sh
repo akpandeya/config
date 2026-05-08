@@ -87,6 +87,17 @@ URL="$(gh pr create \
 
 NUMBER="$(echo "$URL" | awk -F/ '{print $NF}')"
 
+# Work-scope PRs get a Matrix ping at open time so the human merger
+# sees it on their phone — personal PRs already get pinged on merge.
+SCOPE="$("$SCRIPT_DIR/repo-scope-for-cwd.sh" 2>/dev/null || echo "")"
+if [ "$SCOPE" = "work" ]; then
+    jarvis bridge send \
+        --scope work \
+        --kind pr_ready \
+        --title "PR #${NUMBER} opened — needs human merge" \
+        --body "${TITLE}"$'\n'"${URL}" >/dev/null 2>&1 || true
+fi
+
 echo "PR_URL=$URL"
 echo "PR_NUMBER=$NUMBER"
 echo "PR_ACCOUNT=$ACCOUNT"
