@@ -30,6 +30,14 @@ case "$SCOPE" in
         # Default: squash-merge, delete branch.
         gh pr merge "$PR" "--$METHOD" --delete-branch
         echo "✅ PR #$PR squash-merged (scope=personal)."
+        # Send Matrix merge notification (best-effort)
+        PR_TITLE="$(gh pr view "$PR" --json title --jq .title 2>/dev/null || echo "")"
+        PR_URL="$(gh pr view "$PR" --json url --jq .url 2>/dev/null || echo "")"
+        jarvis bridge send \
+            --scope "$SCOPE" \
+            --kind autonomous.progress \
+            --title "merged: PR #${PR}" \
+            --body "${PR_TITLE}"$'\n'"${PR_URL}" 2>/dev/null || true
         ;;
     work)
         # HF policy: humans merge. Print a nudge with the PR URL and
