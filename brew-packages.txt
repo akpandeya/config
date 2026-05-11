@@ -23,6 +23,7 @@ awscli
 kitty
 zsh
 starship
+neovim
 
 # Fonts
 font-jetbrains-mono-nerd-font

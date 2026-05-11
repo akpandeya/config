@@ -119,6 +119,7 @@ link_config() {
 link_config "$REPO_DIR/kitty/kitty.conf"       "$HOME/.config/kitty/kitty.conf"
 link_config "$REPO_DIR/kitty/tab_bar.py"       "$HOME/.config/kitty/tab_bar.py"
 link_config "$REPO_DIR/starship/starship.toml" "$HOME/.config/starship.toml"
+link_config "$REPO_DIR/nvim"                   "$HOME/.config/nvim"
 link_config "$REPO_DIR/claude/skills/jarvis-suggest/SKILL.md" \
             "$HOME/.claude/skills/jarvis-suggest/SKILL.md"
 link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \

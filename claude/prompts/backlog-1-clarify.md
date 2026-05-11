@@ -17,6 +17,7 @@ Workflow — repeat until no ungroomed open issues remain:
 3. Read the code it touches. Use Explore subagents for anything non-trivial. Identify: which files/modules, existing utilities to reuse, related specs, prior art in git log.
 
 4. Diagnose what's missing. A ready issue has:
+     - **Title** — short, declarative, reads well as a roadmap line. The auto-filed feedback titles are usually narrative ("AI summary is probably using stand up mentions in thread") — rewrite to imperative/declarative ("Exclude standup mentions from AI summary input"). Keep under ~70 chars. Always rewrite the title alongside the body; don't leave the original wording in place just because it's already there.
      - Problem — one paragraph, why this exists
      - Scope — bulleted, concrete
      - Non-goals — what NOT to do
@@ -24,13 +25,20 @@ Workflow — repeat until no ungroomed open issues remain:
      - File pointers — paths the implementer should start from
      - Spec ref — if behaviour-bearing
      - First line: `Blocked by: #N, #M` (use `Blocked by: —` if none)
+     - Optional second metadata line: `Model: <name>` (e.g. `Model: haiku`, `Model: sonnet`, `Model: opus`, or a full Anthropic model ID). Include this ONLY when a non-default tier is clearly appropriate for the issue — large/risky refactors → `opus`, cheap mechanical edits → `haiku`. Omit the line entirely when the default tier is fine; autopilot falls through to the CLI flag and the config default. Never invent values; pick from the documented tiers or paste a full model ID. The annotation is autopilot's most-specific routing signal — it overrides both the CLI `--model` flag and the configured `heavy` tier.
      - Tier label present
 
 5. Ask me as many questions as needed to fill gaps. Use AskUserQuestion, batch related questions, max 3-4 per issue. Skip questions you can answer from code reading. Push back if my answer feels under-specified — surface the tradeoff, don't rubber-stamp.
 
-6. Rewrite the issue body. Show me the proposed new body before writing. On approval:
-     gh issue edit <n> --body-file <tmp>
+5a. **Design-heavy?** If the issue carries non-trivial UI/UX judgement that's better handled in a dedicated design pass (multiple plausible layouts, novel components, mockups worth comparing, end-to-end flow redesigns), do NOT design it inline. Pin down everything else (problem, scope, non-goals, acceptance criteria, file pointers), but leave the *visual/interaction* spec to the design pass. Add the `needs-design` label and a `## Design pass` section to the body listing what specifically needs designing. Light UI ("add a list/section to an existing settings page", "add a button that calls an endpoint") does NOT need this label. When in doubt, ask me.
+
+6. Rewrite the title AND the body. Show me both before writing. On approval:
+     gh issue edit <n> --title "<new title>" --body-file <tmp>
+     # If the issue is design-heavy (step 5a):
+     gh issue edit <n> --add-label needs-design
+     # ELSE (no design pass needed) — only then is it autonomous-ready:
      gh issue edit <n> --add-label groomed
+   The `groomed` label means "autonomous-Claude-ready". Issues that still need a design pass are NOT autonomous-ready — the design pass adds `groomed` after resolving the visuals. Never apply both `groomed` and `needs-design` at once.
 
 7. Move to the next issue without approval. Keep going until I say stop or the queue is empty. You can continue going until you need my input.
 
