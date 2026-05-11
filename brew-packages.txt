@@ -24,6 +24,8 @@ kitty
 zsh
 starship
 neovim
+tree-sitter-cli
+ripgrep
 
 # Fonts
 font-jetbrains-mono-nerd-font
