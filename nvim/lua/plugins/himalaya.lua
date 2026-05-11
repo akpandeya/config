@@ -1,7 +1,7 @@
 return {
   {
     "pimalaya/himalaya-vim",
-    cmd = { "Himalaya", "HimalayaAccount", "HimalayaAccounts" },
+    cmd = { "Himalaya", "HimalayaAccount", "HimalayaAccountUnread", "HimalayaAccounts" },
     keys = {
       { "<leader>mw", "<cmd>HimalayaAccount work<cr>",     desc = "Mail: work" },
       { "<leader>mp", "<cmd>HimalayaAccount personal<cr>", desc = "Mail: personal" },
@@ -52,6 +52,23 @@ return {
           map("a", function() himalaya_filter("")              end, "Filter: all")
         end,
       })
+
+      -- :HimalayaAccountUnread <account> — same as :HimalayaAccount, but
+      -- chains the unread narrow onto the listing buffer's post-load
+      -- FileType callback. Fixes the race where `+normal u` from the
+      -- jarvis launcher fired before the buffer-local `u` keymap was
+      -- mounted (the listing populates async, so the keystroke fell
+      -- through to vim's default `undo`).
+      vim.api.nvim_create_user_command("HimalayaAccountUnread", function(opts)
+        vim.api.nvim_create_autocmd("FileType", {
+          pattern = "himalaya-email-listing",
+          once = true,
+          callback = function()
+            himalaya_filter("not flag seen")
+          end,
+        })
+        vim.cmd("HimalayaAccount " .. opts.args)
+      end, { nargs = 1 })
     end,
   },
 }
