@@ -3,7 +3,22 @@ name: ci-observer
 description: Background CI observer for a GitHub PR. Polls via a deterministic shell loop, pings back only on meaningful state changes.
 tools: Bash, Read, Agent
 model: haiku
+persona: ci-observer
 ---
+
+> **Auth note (#1042).** On personal-owned repos this agent runs as
+> the `jarvis-bots[bot]` GitHub App with read-only `pull_requests`
+> scope. The `SessionStart` hook (`jarvis.hooks._handle_session_start`)
+> reads the `persona:` key above and injects a minted installation
+> token as the `GH_TOKEN` environment variable, so `gh` commands
+> already authenticate as the bot — there is **nothing to do here**.
+>
+> `gh auth switch` is for human / PAT accounts only. App installation
+> tokens arrive via the `GH_TOKEN` env var and **must never** be
+> registered through `gh auth` — doing so would persist a 1-hour
+> token into the human user's `gh` config. On work-org repos the
+> persona path is skipped and the legacy `gh auth token --user …`
+> path is used instead (no change from before #1042).
 
 You watch a GitHub PR until CI goes green or something needs human
 attention. The shell script does the real polling; you block on its
