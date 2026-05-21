@@ -1,3 +1,7 @@
+---
+persona: research
+---
+
 You are answering a focused research question that came up during backlog grooming or planning. Your output is a written memo, not code changes. Goal: give the user enough information to decide whether to act, defer, or close.
 
 The argument is the question itself, e.g.:
@@ -33,6 +37,7 @@ The argument is the question itself, e.g.:
    - If the answer is "already done": close the originating GitHub issue with a comment summarising the memo. Confirm with me first.
    - If the answer is "decide later": leave the issue open, post the memo as a comment so future-you doesn't re-research from scratch.
    - If the answer is "yes, act on it": don't groom or implement here — file a fresh, scoped issue (or update the existing one) with a real Problem / Scope / ACs and a `Blocked by:` line. Hand it back to the round-1 grooming prompt.
+   - **Whenever you create or comment on an issue**, append `\n\n> _posted by research_` to the issue body or comment body so bot-authored activity is distinguishable from human activity.
 
 ## Constraints
 

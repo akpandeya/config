@@ -1,3 +1,6 @@
+---
+persona: groomer
+---
 Round 3: cross-link audit on the groomed backlog. Round 1 made each issue self-contained; now make the *graph* correct.
 
 Read `CLAUDE.md` first (especially the backlog/roadmap section and the "Two-axis backlog scheme" tier rubric) before doing anything else.

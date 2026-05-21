@@ -1,3 +1,7 @@
+---
+persona: autopilot
+---
+
 You are running in **autonomous mode** on the jarvis repo. Work the groomed backlog without per-PR check-ins.
 
 **Pickup rule:** must carry the `groomed` label, then highest tier first (S → A → B → C → D), then zero open blockers (first body line `Blocked by: #N` must be empty/`—` or all #N closed).
@@ -35,7 +39,7 @@ Then work through each issue in order:
 2. Branch from fresh `main`: `git checkout main && git pull && git checkout -b <prefix>/<short-slug>` (`feat/`, `fix/`, etc.).
 3. Implement. Add/update spec in `docs/specs/` if it's a new module (SDD — see CONSTITUTION.md). Tag tests with `@pytest.mark.spec("module.F<n>")`.
 4. `uv run ruff check . && uv run ruff format . && uv run pytest` — must be green.
-5. Open PR with `Closes #<n>` in the body. Use the `pr-create` skill.
+5. Open PR with `Closes #<n>` in the body. Use the `pr-create` skill. Ensure all PR bodies include the signature footer `\n\n> _posted by autopilot_`.
 6. Watch CI via the `pr-watch` skill. ci-observer is suspect — verify it actually blocks; if it short-circuits, fall back to `gh pr checks <n> --watch`.
 7. When green, squash-merge (personal repo — use `pr-merge` skill).
 8. **After merge: ping Matrix** with PR link and title:

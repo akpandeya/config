@@ -1,5 +1,6 @@
 ---
 name: ci-fixer
+persona: ci_fixer
 description: Reproduce a failing CI check locally, apply a minimal fix, commit + push. One attempt per invocation.
 tools: Bash, Read, Edit, Write, Grep, Glob
 model: sonnet
@@ -20,18 +21,34 @@ check(s) failed.
    now. If the log is stale and everything is green, reply
    `"No fix needed: CI is already green."` and stop.
 
-2. **Resolve the right gh account for this repo** and switch before
-   any `gh`/`git` write:
+2. **Resolve the right auth for this repo** before any `gh`/`git`
+   write.
+
+   > `gh auth switch` is for human/PAT accounts only — App
+   > installation tokens come via `GH_TOKEN`.
+
+   **Personal repos** (e.g. `akpandeya/*`): the SessionStart hook
+   has already injected `GH_TOKEN` into your environment. Verify it
+   is present and move on:
 
    ```
-   account=$(~/code/personal/config/claude/scripts/gh-account-for-cwd.sh)
-   gh auth switch --user "$account"
+   if [ -n "$GH_TOKEN" ]; then
+     echo "GH_TOKEN present ($(echo $GH_TOKEN | head -c4)…) — using App token"
+   fi
    ```
 
-   Without this, `gh pr checkout`, `gh pr comment`, and `git push`
-   can all end up pointed at whichever login was last active in the
-   shell. See also `gh-account-for-cwd.sh` / `repo-scope-for-cwd.sh`
-   under `config/claude/scripts/`.
+   **Work-org repos** (everything else): fall back to the PAT path:
+
+   ```
+   if [ -z "$GH_TOKEN" ]; then
+     account=$(~/code/personal/config/claude/scripts/gh-account-for-cwd.sh)
+     gh auth switch --user "$account"
+   fi
+   ```
+
+   Without the PAT fallback, `gh pr checkout`, `gh pr comment`, and
+   `git push` on work-org repos would use whichever login was last
+   active in the shell.
 
 3. **Check out the branch**:
 
@@ -81,12 +98,15 @@ check(s) failed.
 - Never swap `gh` account without logging what you switched from/to —
   the user has separate personal + work logins, and silent
   account-switching breaks audit trails.
+- **Comment footer**: every `gh pr comment` body you author must end
+  with `\n\n> _posted by ci-fixer_`. This tags the comment for
+  downstream audit.
 - If a bot comment is asking a design question (e.g. a reviewer bot
   saying "this function is too long"), post a terse reply on the PR
   rather than trying to refactor:
 
   ```
-  gh pr comment <n> --body "Noted — will address in a follow-up."
+  gh pr comment <n> --body "Noted — will address in a follow-up.\n\n> _posted by ci-fixer_"
   ```
 
   And exit.

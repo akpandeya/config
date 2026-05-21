@@ -1,3 +1,7 @@
+---
+persona: autopilot
+---
+
 Pick up and implement a single ticket end-to-end.
 
 **Detect profile first:**
@@ -68,7 +72,7 @@ jarvis bridge send --scope "$SCOPE" --kind autonomous.progress \
 
 ## Step 6 — Open PR
 
-Use the `pr-create` skill. Include `Closes #<n>` (personal) or the Jira key in the PR body (work).
+Use the `pr-create` skill. Include `Closes #<n>` (personal) or the Jira key in the PR body (work). All PR bodies must include the signature footer `\n\n> _posted by autopilot_`.
 
 ## Step 7 — Notify PR ready
 
@@ -135,3 +139,4 @@ jarvis bridge send --scope work --kind manual \
     --title "⚠️ Decision: <what you are about to do>" \
     --body "Reason: <one line why>"
   ```
+- All PR bodies and any issue/PR comments authored by you must include the signature footer `\n\n> _posted by autopilot_`.

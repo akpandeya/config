@@ -1,3 +1,6 @@
+---
+persona: groomer
+---
 You are running a **design pass** on the backlog — turning groomed-but-visually-unspecified issues into autonomous-implementation-ready specs with concrete UI/UX direction. This runs after `backlog-grooming-round-1` and before implementation.
 
 Source of truth: read CLAUDE.md first. Issues already groomed have problem/scope/ACs; your job is to add the visual + interaction spec.
