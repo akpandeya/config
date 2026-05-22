@@ -133,6 +133,25 @@ for skill in pr-create pr-watch pr-merge ci-fix desloppify prompt; do
                 "$HOME/.claude/skills/$skill"
 done
 
+# --- Setup Shared Antigravity (AGY) & Claude Global Settings and Skills ---
+
+# Global Instructions / Memory files
+link_config "$REPO_DIR/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+link_config "$REPO_DIR/gemini/GEMINI.md" "$HOME/.gemini/GEMINI.md"
+
+# Antigravity personal-skills plugin setup
+mkdir -p "$HOME/.gemini/config/plugins/personal-skills/skills"
+link_config "$REPO_DIR/claude/personal-skills-plugin.json" \
+            "$HOME/.gemini/config/plugins/personal-skills/plugin.json"
+
+# Symlink all user-level skills to Antigravity's personal-skills plugin
+for skill in jarvis-suggest slack-catchup pr-create pr-watch pr-merge ci-fix desloppify prompt; do
+    link_config "$REPO_DIR/claude/skills/$skill" \
+                "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
+done
+
+# --- End Shared Antigravity Setup ---
+
 # Long-form prompts paste into fresh Claude sessions. Source of truth
 # lives in claude/prompts/; symlink each *.md into ~/.claude/prompts/
 # so the `prompt` skill can list and inject them.
@@ -146,6 +165,7 @@ for agent in ci-observer.md ci-fixer.md; do
     link_config "$REPO_DIR/claude/agents/$agent" \
                 "$HOME/.claude/agents/$agent"
 done
+
 
 # Per-scope git identity + SSH signing keys. Symlink the repo's
 # scoped files in as ~/.gitconfig-{personal,work}; they're pulled in
