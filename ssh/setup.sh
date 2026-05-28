@@ -18,12 +18,21 @@ PLIST_PATH="$LAUNCH_AGENTS_DIR/$PLIST_NAME.plist"
 UNLOCK_SCRIPT="$SSH_DIR/ssh_unlock.sh"
 UNLOCK_LOG="$SSH_DIR/ssh_unlock.log"
 
+# Detect OS
+OS_TYPE="${OS_TYPE:-$(uname -s)}"
+
 # Each entry: "key-filename | 1Password item name"
 # Edit this list to match the keys you have in 1Password.
-KEYS=(
-  "id_hf_thinkpad|HF Thinkpad"
-  "id_asus_fedora|Asus fedora"
-)
+if [ "${SETUP_MODE:-work}" = "personal" ]; then
+  KEYS=(
+    "id_asus_fedora|Asus fedora"
+  )
+else
+  KEYS=(
+    "id_hf_thinkpad|HF Thinkpad"
+    "id_asus_fedora|Asus fedora"
+  )
+fi
 VAULT="${OP_VAULT:-Private}"
 
 # ---------------------------------------------------------------------------
@@ -31,12 +40,22 @@ VAULT="${OP_VAULT:-Private}"
 # ---------------------------------------------------------------------------
 
 echo "=== SSH keys from 1Password → disk ==="
+echo "OS Detected: $OS_TYPE"
 echo
 
-for cmd in op ssh-keygen ssh-add launchctl openssl; do
+REQUIRED_CMDS=(op ssh-keygen ssh-add openssl)
+if [ "$OS_TYPE" = "Darwin" ]; then
+  REQUIRED_CMDS+=(launchctl)
+fi
+
+for cmd in "${REQUIRED_CMDS[@]}"; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Missing required tool: $cmd"
-    echo "Install with: brew install --cask 1password && brew install 1password-cli openssh"
+    if [ "$OS_TYPE" = "Darwin" ]; then
+      echo "Install with: brew install --cask 1password && brew install 1password-cli openssh"
+    else
+      echo "Install with: 1password-cli and openssh packages using your system package manager"
+    fi
     exit 1
   fi
 done
@@ -109,7 +128,11 @@ key_has_passphrase() {
 get_pass_from_keychain() {
   # Apple Keychain stores SSH passphrases under service "SSH"; the
   # account name is the full path to the private key.
-  security find-generic-password -a "$1" -s "SSH" -w 2>/dev/null || true
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    security find-generic-password -a "$1" -s "SSH" -w 2>/dev/null || true
+  else
+    return 0
+  fi
 }
 
 save_pass_to_1password() {
@@ -166,8 +189,18 @@ ensure_passphrase() {
   askpass=$(mktemp)
   printf '#!/bin/bash\nprintf "%%s" "%s"\n' "$pass" >"$askpass"
   chmod 700 "$askpass"
-  DISPLAY=:0 SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
-    ssh-add --apple-use-keychain "$key_path" </dev/null
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    DISPLAY=:0 SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
+      ssh-add --apple-use-keychain "$key_path" </dev/null
+  else
+    # Linux / other: load into running ssh-agent without Apple keychain flag
+    if [ -n "$SSH_AUTH_SOCK" ]; then
+      DISPLAY=:0 SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
+        ssh-add "$key_path" </dev/null
+    else
+      echo "  ssh-agent is not running; key not loaded but exported to disk"
+    fi
+  fi
   rm -f "$askpass"
   echo "✓ $key_name loaded into ssh-agent"
 }
@@ -189,12 +222,24 @@ if [ -f "$SSH_CONFIG" ]; then
   cp "$SSH_CONFIG" "$backup"
   echo "Backed up existing ~/.ssh/config → $backup"
 fi
-cp "$SCRIPT_DIR/config.template" "$SSH_CONFIG"
+
+if [ "${SETUP_MODE:-work}" = "personal" ]; then
+  # Exclude the work Host block using Python
+  python3 -c '
+import sys
+content = open(sys.argv[1]).read()
+blocks = content.split("\n\n")
+filtered = [b for b in blocks if "github.com-work" not in b and "id_hf_thinkpad" not in b]
+sys.stdout.write("\n\n".join(filtered))
+' "$SCRIPT_DIR/config.template" > "$SSH_CONFIG"
+else
+  cp "$SCRIPT_DIR/config.template" "$SSH_CONFIG"
+fi
 chmod 600 "$SSH_CONFIG"
 echo "✓ Wrote new ~/.ssh/config"
 
 # ---------------------------------------------------------------------------
-# Install the unlock script and launchd plist
+# Install the unlock script and launchd/systemd agent
 # ---------------------------------------------------------------------------
 
 # Build the key-addition lines inline so the script doesn't need to read
@@ -217,21 +262,48 @@ sys.stdout.write(template.replace("__KEY_LINES__", sys.argv[2]))
 chmod 700 "$UNLOCK_SCRIPT"
 echo "✓ Installed $UNLOCK_SCRIPT"
 
-sed -e "s|__SCRIPT_PATH__|$UNLOCK_SCRIPT|g" \
-    -e "s|__LOG_PATH__|$UNLOCK_LOG|g" \
-    "$SCRIPT_DIR/com.user.ssh_unlock.plist.template" >"$PLIST_PATH"
-echo "✓ Installed $PLIST_PATH"
+if [ "$OS_TYPE" = "Darwin" ]; then
+  sed -e "s|__SCRIPT_PATH__|$UNLOCK_SCRIPT|g" \
+      -e "s|__LOG_PATH__|$UNLOCK_LOG|g" \
+      "$SCRIPT_DIR/com.user.ssh_unlock.plist.template" >"$PLIST_PATH"
+  echo "✓ Installed $PLIST_PATH"
 
-# Reload the launchd agent.
-launchctl bootout "gui/$UID/$PLIST_NAME" 2>/dev/null || true
-if launchctl bootstrap "gui/$UID" "$PLIST_PATH" 2>/dev/null; then
-  launchctl kickstart "gui/$UID/$PLIST_NAME"
-  echo "✓ Reloaded launchd agent"
-else
-  # Older macOS fallback.
-  launchctl unload "$PLIST_PATH" 2>/dev/null || true
-  launchctl load "$PLIST_PATH"
-  echo "✓ Loaded launchd agent (legacy path)"
+  # Reload the launchd agent.
+  launchctl bootout "gui/$UID/$PLIST_NAME" 2>/dev/null || true
+  if launchctl bootstrap "gui/$UID" "$PLIST_PATH" 2>/dev/null; then
+    launchctl kickstart "gui/$UID/$PLIST_NAME"
+    echo "✓ Reloaded launchd agent"
+  else
+    # Older macOS fallback.
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    launchctl load "$PLIST_PATH"
+    echo "✓ Loaded launchd agent (legacy path)"
+  fi
+elif [ "$OS_TYPE" = "Linux" ]; then
+  # On Linux, standard way to unlock at login can be handled by systemd user unit
+  SYSTEMD_DIR="$HOME/.config/systemd/user"
+  SYSTEMD_SERVICE="$SYSTEMD_DIR/ssh-unlock.service"
+  mkdir -p "$SYSTEMD_DIR"
+  cat <<EOF >"$SYSTEMD_SERVICE"
+[Unit]
+Description=Unlock SSH keys from 1Password
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=$UNLOCK_SCRIPT
+StandardOutput=append:$UNLOCK_LOG
+StandardError=append:$UNLOCK_LOG
+
+[Install]
+WantedBy=default.target
+EOF
+  echo "✓ Installed systemd service at $SYSTEMD_SERVICE"
+  if command -v systemctl &>/dev/null; then
+    systemctl --user daemon-reload || true
+    systemctl --user enable ssh-unlock.service || true
+    echo "✓ Enabled systemd service ssh-unlock.service"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -245,8 +317,16 @@ echo
 echo "If the keys above match your 1Password entries, you're done."
 echo
 echo "Log: $UNLOCK_LOG"
-echo "Plist: $PLIST_PATH"
-echo
-echo "To revert: edit ~/.ssh/config — comment out the IdentityFile"
-echo "lines, uncomment the IdentityAgent block at the bottom, then run"
-echo "launchctl bootout gui/\$UID/$PLIST_NAME && rm $PLIST_PATH"
+if [ "$OS_TYPE" = "Darwin" ]; then
+  echo "Plist: $PLIST_PATH"
+  echo
+  echo "To revert: edit ~/.ssh/config — comment out the IdentityFile"
+  echo "lines, uncomment the IdentityAgent block at the bottom, then run"
+  echo "launchctl bootout gui/\$UID/$PLIST_NAME && rm $PLIST_PATH"
+else
+  echo "Systemd service: $SYSTEMD_SERVICE"
+  echo
+  echo "To revert: edit ~/.ssh/config — comment out the IdentityFile"
+  echo "lines, then run"
+  echo "systemctl --user disable ssh-unlock.service && rm $SYSTEMD_SERVICE"
+fi

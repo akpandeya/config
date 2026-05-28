@@ -5,62 +5,213 @@
 
 set -e
 
+# --- OS Detection ---
+OS_TYPE="$(uname -s)"
 echo "=== Development Environment Setup ==="
+echo "OS Detected: $OS_TYPE"
 echo
 
-# Check if Homebrew is installed
-if ! command -v brew &> /dev/null; then
-    echo "Installing Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-else
-    echo "✓ Homebrew already installed"
+# --- Profile Selection ---
+if [ -z "$SETUP_MODE" ]; then
+    if [ -t 0 ]; then
+        echo "Select setup profile:"
+        echo "  1) Work (sets up both work and personal configs & credentials)"
+        echo "  2) Personal (sets up only personal configs & credentials)"
+        read -p "Choose option [1 or 2, default: 2]: " mode_opt
+        case "$mode_opt" in
+            1) SETUP_MODE="work" ;;
+            *) SETUP_MODE="personal" ;;
+        esac
+    else
+        SETUP_MODE="personal"
+    fi
+fi
+export SETUP_MODE
+echo "Profile Selected: $SETUP_MODE"
+echo
+
+# Check if Homebrew is installed (macOS only or Linux if brew is preferred)
+if [ "$OS_TYPE" = "Darwin" ]; then
+    if ! command -v brew &> /dev/null; then
+        echo "Installing Homebrew..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    else
+        echo "✓ Homebrew already installed"
+    fi
 fi
 
 echo
-echo "=== Installing Homebrew packages ==="
+echo "=== Parsing packages ==="
 echo
 
-# Install packages from brew-packages.txt
+# Categorize package lists
+GROUP_CORE=""
+GROUP_TERMINAL=""
+GROUP_WORK=""
+
+# Parse brew-packages.txt
 if [ -f "brew-packages.txt" ]; then
-    while IFS= read -r package || [ -n "$package" ]; do
-        # Skip comments and empty lines
-        [[ "$package" =~ ^#.*$ ]] || [[ -z "$package" ]] && continue
-
-        is_cask=false
-        brew info --cask "$package" &>/dev/null && is_cask=true
-
-        already_installed=false
-        if $is_cask; then
-            # brew list --cask fails for apps installed outside of brew (App Store, direct download)
-            brew list --cask "$package" &>/dev/null && already_installed=true
-            app_name="$(brew info --cask "$package" --json=v2 2>/dev/null | jq -r '.casks[0].artifacts[] | select(type=="object") | .app[]? // empty' 2>/dev/null | head -1)"
-            [ -n "$app_name" ] && [ -d "/Applications/$app_name" ] && already_installed=true
+    current_group=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Check for group header
+        if [[ "$line" =~ ^#[[:space:]]*Group:[[:space:]]*(.*)$ ]]; then
+            current_group="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
+            continue
         else
-            brew list "$package" &>/dev/null && already_installed=true
-        fi
-
-        if $already_installed; then
-            echo "✓ $package already installed"
-        else
-            echo "Installing $package..."
-            if $is_cask; then
-                brew install --cask "$package"
-            else
-                brew install "$package"
-            fi
+            # Strip trailing/leading whitespace
+            pkg=$(echo "$line" | tr -d '\r' | xargs)
+            case "$current_group" in
+                Core) GROUP_CORE+="$pkg " ;;
+                Terminal) GROUP_TERMINAL+="$pkg " ;;
+                Work) GROUP_WORK+="$pkg " ;;
+                *) GROUP_CORE+="$pkg " ;; # Fallback
+            esac
         fi
     done < brew-packages.txt
 else
     echo "Warning: brew-packages.txt not found"
 fi
 
+# Determine packages to install
+PACKAGES_TO_INSTALL=""
+
+# If stdout is a TTY and CHOOSE_PACKAGES is not set to "all", prompt the user
+if [ -t 0 ] && [ "${CHOOSE_PACKAGES:-prompt}" = "prompt" ]; then
+    echo "Select which groups of packages you want to install:"
+    echo
+    
+    install_core="y"
+    read -p "Install Core Utilities (git, gh, 1password, uv, jq, etc.)? [Y/n]: " resp
+    [[ "$resp" =~ ^[Nn] ]] && install_core="n"
+    
+    install_terminal="y"
+    read -p "Install Terminal Environment (kitty, zsh, starship, neovim, ripgrep, etc.)? [Y/n]: " resp
+    [[ "$resp" =~ ^[Nn] ]] && install_terminal="n"
+    
+    install_work="y"
+    if [ "$SETUP_MODE" = "personal" ]; then
+        install_work="n"
+        read -p "Install DevOps & Work Tools (jira-cli, docker, kubectl, stern, awscli, vault)? [y/N]: " resp
+        [[ "$resp" =~ ^[Yy] ]] && install_work="y"
+    else
+        read -p "Install DevOps & Work Tools (jira-cli, docker, kubectl, stern, awscli, vault)? [Y/n]: " resp
+        [[ "$resp" =~ ^[Nn] ]] && install_work="n"
+    fi
+    
+    echo
+    read -p "Do you want to customize/select individual packages? [y/N]: " resp
+    if [[ "$resp" =~ ^[Yy] ]]; then
+        if [ "$install_core" = "y" ]; then
+            for pkg in $GROUP_CORE; do
+                read -p "  Install $pkg? [Y/n]: " r
+                [[ ! "$r" =~ ^[Nn] ]] && PACKAGES_TO_INSTALL+="$pkg "
+            done
+        fi
+        if [ "$install_terminal" = "y" ]; then
+            for pkg in $GROUP_TERMINAL; do
+                read -p "  Install $pkg? [Y/n]: " r
+                [[ ! "$r" =~ ^[Nn] ]] && PACKAGES_TO_INSTALL+="$pkg "
+            done
+        fi
+        if [ "$install_work" = "y" ]; then
+            for pkg in $GROUP_WORK; do
+                read -p "  Install $pkg? [Y/n]: " r
+                [[ ! "$r" =~ ^[Nn] ]] && PACKAGES_TO_INSTALL+="$pkg "
+            done
+        fi
+    else
+        [ "$install_core" = "y" ] && PACKAGES_TO_INSTALL+="$GROUP_CORE"
+        [ "$install_terminal" = "y" ] && PACKAGES_TO_INSTALL+="$GROUP_TERMINAL"
+        [ "$install_work" = "y" ] && PACKAGES_TO_INSTALL+="$GROUP_WORK"
+    fi
+else
+    # Non-interactive / unattended run: install based on SETUP_MODE
+    PACKAGES_TO_INSTALL+="$GROUP_CORE $GROUP_TERMINAL "
+    if [ "$SETUP_MODE" = "work" ]; then
+        PACKAGES_TO_INSTALL+="$GROUP_WORK "
+    fi
+fi
+
+echo
+echo "=== Installing packages ==="
+echo
+
+# Modular Package Installer
+install_package() {
+    local pkg=$1
+    if [ "$OS_TYPE" = "Darwin" ] || command -v brew &>/dev/null; then
+        is_cask=false
+        # Casks only apply on macOS/Darwin
+        if [ "$OS_TYPE" = "Darwin" ]; then
+            brew info --cask "$pkg" &>/dev/null && is_cask=true
+        fi
+
+        already_installed=false
+        if $is_cask; then
+            # brew list --cask fails for apps installed outside of brew (App Store, direct download)
+            brew list --cask "$pkg" &>/dev/null && already_installed=true
+            app_name="$(brew info --cask "$pkg" --json=v2 2>/dev/null | jq -r '.casks[0].artifacts[] | select(type=="object") | .app[]? // empty' 2>/dev/null | head -1)"
+            [ -n "$app_name" ] && [ -d "/Applications/$app_name" ] && already_installed=true
+        else
+            brew list "$pkg" &>/dev/null && already_installed=true
+        fi
+
+        if $already_installed; then
+            echo "✓ $pkg already installed"
+        else
+            echo "Installing $pkg..."
+            if $is_cask; then
+                brew install --cask "$pkg"
+            else
+                brew install "$pkg"
+            fi
+        fi
+    elif [ "$OS_TYPE" = "Linux" ]; then
+        # Linux systems fallback
+        if command -v apt-get &>/dev/null; then
+            if dpkg -s "$pkg" &>/dev/null; then
+                echo "✓ $pkg already installed"
+            else
+                echo "Installing $pkg via apt..."
+                sudo apt-get update && sudo apt-get install -y "$pkg"
+            fi
+        elif command -v pacman &>/dev/null; then
+            if pacman -Qi "$pkg" &>/dev/null; then
+                echo "✓ $pkg already installed"
+            else
+                echo "Installing $pkg via pacman..."
+                sudo pacman -S --noconfirm "$pkg"
+            fi
+        elif command -v dnf &>/dev/null; then
+            if dnf list installed "$pkg" &>/dev/null; then
+                echo "✓ $pkg already installed"
+            else
+                echo "Installing $pkg via dnf..."
+                sudo dnf install -y "$pkg"
+            fi
+        else
+            echo "Warning: No supported package manager found to install $pkg"
+        fi
+    fi
+}
+
+for package in $PACKAGES_TO_INSTALL; do
+    install_package "$package"
+done
+
 echo
 echo "=== Creating directory structure ==="
 echo
 
-mkdir -p ~/code/work
-mkdir -p ~/code/personal
-echo "✓ Created ~/code/work and ~/code/personal"
+if [ "$SETUP_MODE" = "personal" ]; then
+    mkdir -p ~/code/personal
+    echo "✓ Created ~/code/personal"
+else
+    mkdir -p ~/code/work
+    mkdir -p ~/code/personal
+    echo "✓ Created ~/code/work and ~/code/personal"
+fi
 
 echo
 echo "=== Setting up git configuration ==="
@@ -171,7 +322,14 @@ done
 # scoped files in as ~/.gitconfig-{personal,work}; they're pulled in
 # by the includeIf blocks set below on the top-level ~/.gitconfig.
 link_config "$REPO_DIR/gitconfig/private/.gitconfig" "$HOME/.gitconfig-personal"
-link_config "$REPO_DIR/gitconfig/work/.gitconfig"    "$HOME/.gitconfig-work"
+if [ "$SETUP_MODE" = "work" ]; then
+    link_config "$REPO_DIR/gitconfig/work/.gitconfig"    "$HOME/.gitconfig-work"
+else
+    if [ -e "$HOME/.gitconfig-work" ] || [ -L "$HOME/.gitconfig-work" ]; then
+        rm -f "$HOME/.gitconfig-work"
+        echo "✓ Removed $HOME/.gitconfig-work"
+    fi
+fi
 
 # Top-level ~/.gitconfig setup. Uses `git config --global` so we only
 # touch the specific keys we care about; anything else the user has
@@ -179,12 +337,13 @@ link_config "$REPO_DIR/gitconfig/work/.gitconfig"    "$HOME/.gitconfig-work"
 # All idempotent — re-running this script leaves a correct config
 # unchanged.
 setup_git_global() {
-    # Identity: work email default (the ~/.gitconfig-work includeIf
-    # file overrides this under ~/code/work/ anyway, but having a
-    # sensible default avoids "Please tell me who you are" on fresh
-    # clones outside that tree).
+    # Identity: default user email based on SETUP_MODE
     git config --global user.name  "Avanindra Pandeya"
-    git config --global user.email "avanindra.pandeya@hellofresh.de"
+    if [ "$SETUP_MODE" = "work" ]; then
+        git config --global user.email "avanindra.pandeya@hellofresh.de"
+    else
+        git config --global user.email "akpandeya1@gmail.com"
+    fi
 
     # SSH signing. `gpg.ssh.program` is intentionally NOT set — the
     # default (system ssh-keygen) reads the on-disk private key
@@ -206,8 +365,10 @@ setup_git_global() {
     {
         [ -f "$HOME/.ssh/id_asus_fedora.pub" ] && \
             echo "akpandeya1@gmail.com $(cat "$HOME/.ssh/id_asus_fedora.pub")"
-        [ -f "$HOME/.ssh/id_hf_thinkpad.pub" ] && \
-            echo "avanindra.pandeya@hellofresh.de $(cat "$HOME/.ssh/id_hf_thinkpad.pub")"
+        if [ "$SETUP_MODE" = "work" ]; then
+            [ -f "$HOME/.ssh/id_hf_thinkpad.pub" ] && \
+                echo "avanindra.pandeya@hellofresh.de $(cat "$HOME/.ssh/id_hf_thinkpad.pub")"
+        fi
     } > "$signers"
     git config --global gpg.ssh.allowedSignersFile "$signers"
 
@@ -215,8 +376,12 @@ setup_git_global() {
     # absolutely so `git config` handles canonicalisation.
     git config --global 'includeIf.gitdir:~/code/personal/.path' \
         "$HOME/.gitconfig-personal"
-    git config --global 'includeIf.gitdir:~/code/work/.path' \
-        "$HOME/.gitconfig-work"
+    if [ "$SETUP_MODE" = "work" ]; then
+        git config --global 'includeIf.gitdir:~/code/work/.path' \
+            "$HOME/.gitconfig-work"
+    else
+        git config --global --unset-all 'includeIf.gitdir:~/code/work/.path' 2>/dev/null || true
+    fi
 
     # Sane defaults (init branch, push behaviour).
     git config --global init.defaultBranch main
@@ -225,7 +390,7 @@ setup_git_global() {
     git config --global pull.rebase           false
 }
 setup_git_global
-echo "✓ ~/.gitconfig signing + includeIf set (personal + work)"
+echo "✓ ~/.gitconfig signing + includeIf set"
 
 if ! grep -q 'starship init zsh' "$HOME/.zshrc" 2>/dev/null; then
     printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"

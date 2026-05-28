@@ -24,6 +24,7 @@ return {
       telescope.setup({
         defaults = {
           path_display = { "truncate" },
+          file_ignore_patterns = { "node_modules", "%.git/", "build/", "%.gradle/", "target/", "%.venv/", "venv/", "env/", "__pycache__/" },
           mappings = {
             i = {
               ["<C-j>"] = "move_selection_next",

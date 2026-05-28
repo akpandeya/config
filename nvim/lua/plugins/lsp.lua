@@ -41,6 +41,14 @@ return {
         end,
       })
 
+      vim.lsp.config("kotlin_language_server", {
+        cmd_env = { JAVA_OPTS = "-Xmx3g -Xss4m" },
+        single_file_support = false,
+        init_options = {
+          storagePath = vim.fn.stdpath("cache") .. "/kotlin_language_server"
+        }
+      })
+
       vim.lsp.enable({ "basedpyright", "kotlin_language_server" })
     end,
   },

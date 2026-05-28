@@ -1,40 +1,34 @@
 # Essential Homebrew packages for development setup
 
-# CLI tools
+# Group: Core
+# CLI tools & GUI apps
 gh
 git
-jira-cli
 1password-cli
-
-# GUI apps (required for 1Password CLI app integration — biometric unlock)
 1password
-
-# Container & orchestration
 docker
 colima
-kubectl
-stern
+uv
+jq
+wget
+curl
+tree
 
-# Infrastructure tools
-vault
-awscli
-
-# Terminal & shell
+# Group: Terminal
+# Terminal & shell environment
 kitty
 zsh
 starship
 neovim
 tree-sitter-cli
 ripgrep
-
-# Fonts
 font-jetbrains-mono-nerd-font
 
-# Python
-uv
+# Group: Work
+# DevOps, Container & orchestration, Infrastructure
+jira-cli
+kubectl
+stern
+vault
+awscli
 
-# Utilities
-jq
-wget
-curl
-tree
