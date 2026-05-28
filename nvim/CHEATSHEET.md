@@ -18,6 +18,9 @@ Your `<leader>` key is mapped to the **Spacebar** (` `).
 | `<leader>fr` (`Space + f + r`) | **Recent Files** | Show recently opened files |
 | `<leader>fs` (`Space + f + s`) | **Document Symbols** | Find classes/methods/variables in current file |
 | `<leader>/` (`Space + /`) | **Fuzzy Search** | Search text inside the active buffer |
+| `<leader>fc` (`Space + f + c`) | **Find Commands** | Search available Vim and plugin commands |
+| `<leader>fk` (`Space + f + k`) | **Find Keymaps** | Search active key combinations |
+| `<leader>e` (`Space + e`) | **Toggle Explorer** | Open/close the sidebar file tree (Neo-tree) |
 | `Ctrl + j` / `Ctrl + k` | **Telescope Nav** | Move down/up the results list (inside Telescope) |
 | `Ctrl + v` | **Vert Split Open** | Open selected file in a vertical split (on the right) |
 | `Ctrl + x` | **Horiz Split Open**| Open selected file in a horizontal split (on bottom) |

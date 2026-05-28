@@ -18,6 +18,8 @@ return {
       { "<leader>fr", "<cmd>Telescope oldfiles<cr>",    desc = "Recent files" },
       { "<leader>fs", "<cmd>Telescope lsp_document_symbols<cr>", desc = "Document symbols" },
       { "<leader>/",  "<cmd>Telescope current_buffer_fuzzy_find<cr>", desc = "Fuzzy in buffer" },
+      { "<leader>fc", "<cmd>Telescope commands<cr>", desc = "Find commands" },
+      { "<leader>fk", "<cmd>Telescope keymaps<cr>",  desc = "Find keymaps" },
     },
     config = function()
       local telescope = require("telescope")
