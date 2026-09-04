@@ -323,13 +323,21 @@ mkdir -p "$HOME/.gemini/config/plugins/personal-skills/skills"
 link_config "$REPO_DIR/claude/personal-skills-plugin.json" \
             "$HOME/.gemini/config/plugins/personal-skills/plugin.json"
 
-# Symlink all non-jarvis skills to Antigravity's personal-skills plugin
+# Symlink all non-jarvis skills to Antigravity's personal-skills plugin.
+# issue-decompose and agy-drive are excluded here since Antigravity gets
+# its own gemini-tailored versions from gemini/skills/ below.
 for skill_dir in "$REPO_DIR"/claude/skills/*/; do
     skill="$(basename "$skill_dir")"
     case "$skill" in
-        jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
+        jarvis-suggest|jarvis-continue-in-phone|slack-catchup|issue-decompose|agy-drive) continue ;;
     esac
     link_config "$skill_dir" \
+                "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
+done
+
+# Gemini-specific personal skills
+for skill in issue-decompose agy-drive; do
+    link_config "$REPO_DIR/gemini/skills/$skill" \
                 "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
 done
 

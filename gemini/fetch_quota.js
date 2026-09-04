@@ -2,10 +2,25 @@ const http = require('http');
 const execSync = require('child_process').execSync;
 const WebSocket = require('/Users/dipukumari/.gemini/antigravity-cli/scratch/node_modules/ws');
 
-// Find the Antigravity remote debugging port using lsof
+// Find the Antigravity remote debugging port using lsof and PID
 function getDebugPort() {
   try {
-    const output = execSync('lsof -i -P -n | grep "Antigravi" | grep -oE "127.0.0.1:[0-9]+" | head -n 1', { encoding: 'utf8' });
+    const pidOutput = execSync('ps -axww | grep -E "/Applications/Antigravity\\.app/Contents/MacOS/Antigravity$" | grep -v grep | awk \'{print $1}\'', { encoding: 'utf8' }).trim();
+    if (pidOutput) {
+      const pid = parseInt(pidOutput, 10);
+      if (!isNaN(pid)) {
+        const portOutput = execSync(`lsof -a -i -P -n -p ${pid} | grep -oE "127.0.0.1:[0-9]+" | head -n 1`, { encoding: 'utf8' });
+        const match = portOutput.match(/:([0-9]+)/);
+        if (match) return parseInt(match[1], 10);
+      }
+    }
+  } catch (e) {
+    // Ignore error
+  }
+  
+  // Fallback to original logic if PID check fails
+  try {
+    const output = execSync('lsof -i -P -n | grep "Antigravi" | grep -v "IDE" | grep -oE "127.0.0.1:[0-9]+" | head -n 1', { encoding: 'utf8' });
     const match = output.match(/:([0-9]+)/);
     if (match) return parseInt(match[1], 10);
   } catch (e) {
@@ -141,28 +156,19 @@ async function main() {
     }
 
     const remainingPercent = Math.round((config.remainingFraction ?? 1.0) * 100);
-    let resetsInStr = '';
+    const resetTimeSeconds = config.resetTimeSeconds ? Number(config.resetTimeSeconds) : null;
     
-    if (config.resetTimeSeconds) {
-      const resetTimeMs = Number(config.resetTimeSeconds) * 1000;
-      const diffMs = resetTimeMs - Date.now();
-      if (diffMs > 0) {
-        const diffMins = Math.ceil(diffMs / 60000);
-        if (diffMins < 60) {
-          resetsInStr = `refreshes in ${diffMins}m`;
-        } else {
-          const hours = Math.floor(diffMins / 60);
-          const mins = diffMins % 60;
-          resetsInStr = `refreshes in ${hours}h${mins > 0 ? mins + 'm' : ''}`;
-        }
-      } else {
-        resetsInStr = 'refreshed';
-      }
+    let isWeekly = false;
+    if (resetTimeSeconds) {
+      const diffMs = (resetTimeSeconds * 1000) - Date.now();
+      isWeekly = diffMs > 24 * 60 * 60 * 1000; // > 24 hours
     }
 
     console.log(JSON.stringify({
-      remaining: remainingPercent,
-      resets_in: resetsInStr
+      five_hour_remaining: isWeekly ? null : remainingPercent,
+      five_hour_resets_at: isWeekly ? null : resetTimeSeconds,
+      seven_day_remaining: isWeekly ? remainingPercent : null,
+      seven_day_resets_at: isWeekly ? resetTimeSeconds : null
     }));
   } catch (e) {
     console.log(JSON.stringify({ error: e.message }));

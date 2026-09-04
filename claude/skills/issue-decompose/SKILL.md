@@ -1,6 +1,6 @@
 ---
 name: issue-decompose
-description: Decompose a GitHub issue into atomic, agy/Jules-runnable task prompt files using Opus with extended thinking. Usage: /issue-decompose <owner/repo> <issue-number>
+description: Decompose a GitHub issue into atomic, agy/Jules-runnable task prompt files using Opus with extended thinking. Honors a verbatim `## agy-tasks` spec in the issue body (transcribes 1:1 instead of re-deriving). Usage: /issue-decompose <owner/repo> <issue-number>
 allowed-tools: Bash, Read, Write, Agent
 argument-hint: "<owner/repo> <issue-number>"
 ---
@@ -39,13 +39,40 @@ You are decomposing GitHub issue into atomic implementation tasks.
 **Issue:** Run `gh issue view $ISSUE_NUM --repo $REPO --json title,body,labels` and
 read the full output.
 
+**FIRST — check for a verbatim task spec.** Inspect the issue body. If it contains
+the marker `<!-- agy-decompose: verbatim -->` or an `## agy-tasks` heading, you are in
+**VERBATIM MODE**: the author has already decomposed the work and you MUST NOT
+re-derive, split, merge, reorder, drop, or invent tasks. Transcribe each task block
+**1:1** into one task file, preserving the author's boundaries exactly. Each task block
+looks like:
+
+```
+### task-NN — <title>
+- files: `path/a`, `path/b`
+- blockedBy: none            # or a comma list like: task-01, task-02
+- acceptance:
+  - [ ] criterion 1
+  - [ ] criterion 2
+- context: 1–2 sentences for an autonomous agent.
+```
+
+In verbatim mode: use the block's `title`, `files`, `blockedBy`, `acceptance`, and
+`context` verbatim to fill the task-file template below (one `task-NN.md` per block,
+numbered exactly as authored). You may read the named `files` only to enrich the
+`## Context` line — never to change the task set. Still extract `standing-rules.md`
+from CLAUDE.md/AGENTS.md and write `manifest.json` (one entry per block, with the
+authored `blockedBy`). Then STOP — **skip the "Decompose" instructions below.**
+
+If neither marker is present, proceed in normal (re-derivation) mode below.
+
 **Standing rules:** Read `CLAUDE.md` or `AGENTS.md` in the repo root
 (path: `$REPO_PATH/CLAUDE.md` or via gh api). Extract the project's own rules
 about testing, style, DB, auth, etc. into a `standing-rules.md`.
 
 **Relevant files:** Infer which 3–5 source files the issue will touch. Read them.
 
-**Decompose** into N tasks (usually 1–5) where each task:
+**Decompose** (normal mode only — skip if you handled a verbatim spec above) into N
+tasks (usually 1–5) where each task:
 - Touches ≤ 3 files, ships as exactly 1 commit
 - Has ≤ 5 acceptance criteria verifiable without Playwright/e2e
 - Has an explicit `blockedBy: ["task-NN"]` list if it must come after another task
