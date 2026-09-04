@@ -1,0 +1,31 @@
+# Managed by ~/code/personal/config/ssh/setup.sh — do not edit by hand.
+# To revert to the 1Password SSH agent, uncomment the IdentityAgent line
+# below and comment out the IdentityFile lines.
+
+Include ~/.colima/ssh_config
+
+# Work GitHub (HF Thinkpad key)
+Host github.com-work
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_hf_thinkpad
+    IdentitiesOnly yes
+
+# Personal GitHub (Asus fedora key)
+Host github.com-personal
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_asus_fedora
+    IdentitiesOnly yes
+
+# Default GitHub → personal key
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_asus_fedora
+    IdentitiesOnly yes
+
+# --- 1Password agent fallback (commented out) ---
+# To revert: comment out IdentityFile lines above and uncomment these:
+# Host *
+#     IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"

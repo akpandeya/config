@@ -1,0 +1,25 @@
+{
+  "colorScheme": "dark",
+  "enableTelemetry": false,
+  "model": "Gemini 3.5 Flash (High)",
+  "permissions": {
+    "allow": [
+      "command(git status)",
+      "command(git branch)",
+      "command(gh)",
+      "command(git checkout)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/Users/dipukumari/.gemini/antigravity-cli/statusline.sh",
+    "enabled": true,
+    "stack_with_default": true
+  },
+  "trustedWorkspaces": [
+    "/Users/dipukumari",
+    "/Users/dipukumari/Documents/akpandeya/jarvis",
+    "/Users/dipukumari/Documents/akpandeya/party-planner",
+    "/Users/dipukumari/Documents/akpandeya"
+  ]
+}

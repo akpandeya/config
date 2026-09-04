@@ -1,0 +1,62 @@
+# Matrix-style starship prompt
+# Left: directory + kubernetes context/namespace, cursor on next line.
+# Git status / date / time / pwd live in the kitty bottom tab bar
+# (kitty/tab_bar.py) so they stay visible across long commands.
+
+format = """
+$directory$kubernetes
+$character"""
+
+add_newline = true
+
+[character]
+success_symbol = "[❯](bold green)"
+error_symbol   = "[❯](bold red)"
+vimcmd_symbol  = "[❮](bold green)"
+
+[directory]
+style               = "bold green"
+truncation_length   = 3
+truncation_symbol   = "…/"
+truncate_to_repo    = false
+read_only           = " "
+read_only_style     = "bold green"
+
+[kubernetes]
+disabled           = false
+format             = '[󱃾 $context( \($namespace\))]($style) '
+style              = "bold green"
+detect_files       = []
+detect_folders     = []
+
+# Git and time live in the kitty tab bar instead of the prompt — disable here.
+[git_branch]
+disabled = true
+[git_status]
+disabled = true
+[git_commit]
+disabled = true
+[git_state]
+disabled = true
+[git_metrics]
+disabled = true
+[time]
+disabled = true
+
+# Turn off defaults that would add non-green color to the prompt.
+[package]
+disabled = true
+[nodejs]
+disabled = true
+[python]
+disabled = true
+[rust]
+disabled = true
+[golang]
+disabled = true
+[java]
+disabled = true
+[ruby]
+disabled = true
+[docker_context]
+disabled = true

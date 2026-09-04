@@ -1,0 +1,6 @@
+[user]
+    name = __FULL_NAME__
+    email = __PERSONAL_EMAIL__
+
+[core]
+    sshCommand = ssh -o IdentitiesOnly=yes

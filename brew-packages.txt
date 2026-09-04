@@ -1,0 +1,40 @@
+# Essential Homebrew packages for development setup
+
+# Group: Core
+# CLI tools & GUI apps
+gh
+git
+1password-cli
+1password
+docker
+colima
+uv
+jq
+wget
+curl
+tree
+
+# Group: Terminal
+# Terminal & shell environment
+kitty
+zsh
+starship
+neovim
+tree-sitter-cli
+ripgrep
+fzf
+font-jetbrains-mono-nerd-font
+
+# Group: Work
+# DevOps, Container & orchestration, Infrastructure
+jira-cli
+kubectl
+stern
+vault
+awscli
+
+# Group: AI
+# AI coding agents (tap resolves automatically on first install)
+anomalyco/tap/opencode
+rtk
+

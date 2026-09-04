@@ -1,0 +1,72 @@
+#!/bin/bash
+# Launchd-triggered at login. Adds SSH keys to the macOS ssh-agent so
+# long-running unattended processes (Claude Code, cron jobs, etc.) don't
+# block on a 1Password unlock prompt.
+#
+# First boot after install: reads each key's passphrase from 1Password
+# (requires the desktop app to be unlocked). Subsequent boots: Apple
+# Keychain has the passphrase cached, so 1Password isn't consulted.
+#
+# Managed by ~/code/personal/config/ssh/setup.sh — do not edit in place.
+
+set -e
+export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+# Wait up to 60 s for the 1Password desktop integration to be ready.
+# On fresh login, the desktop app takes a few seconds to launch.
+if command -v op >/dev/null 2>&1; then
+  for _ in $(seq 1 30); do
+    if op account list 2>/dev/null | grep -q .; then
+      break
+    fi
+    sleep 2
+  done
+fi
+
+add_key() {
+  local key_path=$1 op_ref=$2
+  if [ ! -f "$key_path" ]; then
+    log "skip $key_path (not on disk)"
+    return 0
+  fi
+  # If ssh-agent already holds this key, nothing to do.
+  local fp
+  fp=$(ssh-keygen -lf "$key_path" 2>/dev/null | awk '{print $2}')
+  if [ -n "$fp" ] && ssh-add -l 2>/dev/null | grep -q "$fp"; then
+    log "already loaded: $key_path"
+    return 0
+  fi
+
+  # Try Apple Keychain first — ssh-add without a passphrase helper will
+  # pull from the keychain silently if the passphrase is cached there.
+  if ssh-add --apple-use-keychain "$key_path" </dev/null 2>/dev/null; then
+    log "loaded from keychain: $key_path"
+    return 0
+  fi
+
+  # Keychain miss — fetch from 1Password.
+  if ! command -v op >/dev/null 2>&1; then
+    log "ERROR: op not found and keychain miss for $key_path"
+    return 1
+  fi
+  local pass
+  if ! pass=$(op read "$op_ref" 2>&1); then
+    log "ERROR: op read failed for $op_ref: $pass"
+    return 1
+  fi
+
+  local askpass
+  askpass=$(mktemp)
+  printf '#!/bin/bash\nprintf "%%s" "%s"\n' "$pass" >"$askpass"
+  chmod 700 "$askpass"
+  DISPLAY=:0 SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
+    ssh-add --apple-use-keychain "$key_path" </dev/null
+  rm -f "$askpass"
+  log "loaded via 1Password: $key_path"
+}
+
+__KEY_LINES__
+
+log "ssh_unlock finished"
