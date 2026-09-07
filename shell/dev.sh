@@ -256,14 +256,15 @@ oc() { _dev_go opencode "$@"; }
 
 # --- fuzzy cd -----------------------------------------------------------
 
-# Direct subfolders of each group folder (e.g. work/<repo>, personal/<repo>)
-# for fcd — deliberately not a full recursive walk, since group folders can
-# be large monorepos where that's slow and mostly noise (build artifacts,
-# caches). Includes non-git folders too, unlike _dev_repos.
+# Group folders themselves (e.g. work, personal) plus their direct
+# subfolders (e.g. work/<repo>, personal/<repo>) for fcd — deliberately not
+# a full recursive walk, since group folders can be large monorepos where
+# that's slow and mostly noise (build artifacts, caches). Includes non-git
+# folders too, unlike _dev_repos.
 _dev_dirs() {
     local root="$(_dev_code_root)"
     [ -d "$root" ] || return 1
-    find "$root" -mindepth 2 -maxdepth 2 -type d 2>/dev/null \
+    find "$root" -mindepth 1 -maxdepth 2 -type d 2>/dev/null \
         | sed "s|^$root/||" \
         | sort
 }
