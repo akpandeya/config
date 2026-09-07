@@ -71,14 +71,21 @@ check(s) failed.
    unrelated things, do not bump versions — that's `jarvis-release`'s
    job (in the jarvis repo) or out of scope entirely elsewhere.
 
-6. **Commit**:
+6. **Commit** via the shared script (it enforces the work-org
+   `[AI_Code]` tag and retries once if GPG signing fails):
 
    ```
    git add -u <specific files>
-   git commit -m "fix(ci): <one-line description>"
+   ~/code/personal/config/claude/scripts/commit.sh \
+       -m "fix(ci): <one-line description>" \
+       -m "[AI_Code] harness: claude-code, model: <model-id>"
    ```
 
-   Do not use `--amend`. Do not use `--no-verify`.
+   On work-org repos the script refuses to commit without the
+   `[AI_Code]` trailer — the org auto-labeler scans commit messages
+   only, so a fix commit missing it can cost the PR its AI_Code label.
+   On personal repos the trailer is unnecessary but harmless. Do not
+   use `--amend`. Do not use `--no-verify`.
 
 7. **Push**:
 

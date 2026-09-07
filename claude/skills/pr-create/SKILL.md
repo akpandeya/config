@@ -17,7 +17,11 @@ Check working tree:
 !`git log --oneline -5`
 
 If there are uncommitted changes, ask the user whether to commit them
-first (don't auto-commit — user hasn't asked for that).
+first (don't auto-commit — user hasn't asked for that). If they want
+them committed, use the `git-commit` skill — it owns the message
+conventions (conventional prefix, the `[AI_Code]` trailer the
+hellofresh auto-labeler requires in commit messages) and the commit
+script.
 
 ## Write the PR body
 
