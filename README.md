@@ -67,12 +67,13 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 
 | Command | What it does |
 |---|---|
-| `dev` / `dev <query>` | fzf over all repos, shortcuts pinned on top marked `*`. `enter` asks which harness, `ctrl-o` opens opencode, `ctrl-c` opens Claude Code. |
+| `dev` / `dev <query>` | fzf over all repos, shortcuts pinned on top marked `*`, group folders (e.g. `work`, `personal`) marked `>`. `enter` asks which harness, `ctrl-o` opens opencode, `ctrl-c` opens Claude Code. |
 | `cc [target]` | Claude Code (`claude --dangerously-skip-permissions`). No target → opens in the current directory. |
 | `oc [target]` | opencode (`opencode --auto`). No target → opens in the current directory. |
 | `<shortcut>` e.g. `fda` | cd into the shortcut's repo + launch its default harness. |
+| `fcd [query]` | fuzzy-cd into a repo/folder directly under a group folder (`work/<repo>`, `personal/<repo>`) — just cd's, no harness. |
 
-A `target` can be a shortcut name (`cc fda`), a repo basename (`oc gambitflow`), a full relative path, or a fuzzy query (`cc dem and` → picker pre-filtered).
+A `target` can be a shortcut name (`cc fda`), a repo basename (`oc gambitflow`), a group folder (`cc work`, `oc personal`), a full relative path, or a fuzzy query (`cc dem and` → picker pre-filtered).
 
 ### Add a new shortcut
 

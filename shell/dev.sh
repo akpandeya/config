@@ -2,14 +2,19 @@
 #
 # Commands:
 #   dev [query]     fzf over all git repos under $DEV_CODE_ROOT (default
-#                   ~/code), shortcuts pinned on top marked "*".
+#                   ~/code), shortcuts pinned on top marked "*", group
+#                   folders (e.g. work, personal) marked ">".
 #                   enter asks for a harness, ctrl-o = opencode,
 #                   ctrl-c = Claude Code.
 #   cc [target]     Claude Code (claude --dangerously-skip-permissions)
 #   oc [target]     opencode (opencode --auto)
 #                   No target: open the harness in the current directory.
-#                   Target: shortcut name, repo basename/path, or fuzzy query.
+#                   Target: shortcut name, repo basename/path, group folder
+#                   (e.g. `cc work`), or fuzzy query.
 #   <shortcut>      e.g. `fda`: cd into the repo + its default harness.
+#   fcd [query]     fuzzy-cd into a repo/folder directly under a group
+#                   folder (e.g. work/<repo>, personal/<repo>) — just cd,
+#                   no harness launch.
 #
 # Shortcuts live in dev-shortcuts.conf next to this file — see its header.
 # To add another harness, edit _dev_launch and the no-arg case in _dev_go.
@@ -75,12 +80,26 @@ _dev_repos() {
     done | sort
 }
 
-# Picker lines: shortcuts first ("* name -> relpath"), then all repos.
+# Immediate subdirectories of the code root (e.g. work, personal) — lets
+# cc/oc/dev jump straight to a group root, not just individual repos.
+_dev_groups() {
+    local root="$(_dev_code_root)"
+    [ -d "$root" ] || return 1
+    find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r d; do
+        print -r -- "${d#$root/}"
+    done | sort
+}
+
+# Picker lines: shortcuts first ("* name -> relpath"), then group folders
+# ("> name"), then all repos.
 _dev_list() {
     # NOTE: zsh runs the last pipeline segment in the current shell, so a
     # variable named "path" here would clobber $PATH for _dev_repos below.
     _dev_shortcuts | while IFS=$'\t' read -r name rpath harness; do
         [ -n "$name" ] && printf '* %s -> %s\n' "$name" "$rpath"
+    done
+    _dev_groups | while IFS= read -r g; do
+        printf '> %s\n' "$g"
     done
     _dev_repos
 }
@@ -90,6 +109,8 @@ _dev_sel_to_rel() {
     local sel="$1"
     if [[ "$sel" == \*\ * ]]; then
         sel="${sel##* -> }"
+    elif [[ "$sel" == \>\ * ]]; then
+        sel="${sel#> }"
     fi
     sel="${sel#"${sel%%[![:space:]]*}"}"
     sel="${sel%"${sel##*[![:space:]]}"}"
@@ -142,7 +163,16 @@ _dev_resolve() {
         fi
     done < <(_dev_shortcuts)
 
-    # 2. exact repo relpath, or unique repo basename
+    # 2. exact group folder (e.g. work, personal)
+    local grp
+    while IFS= read -r grp; do
+        if [ "$grp" = "$q" ]; then
+            print -r -- "$grp"
+            return 0
+        fi
+    done < <(_dev_groups)
+
+    # 3. exact repo relpath, or unique repo basename
     local rel
     local -a basename_matches
     basename_matches=()
@@ -159,7 +189,7 @@ _dev_resolve() {
         return 0
     fi
 
-    # 3. fuzzy: one hit -> jump straight there, otherwise open the picker
+    # 4. fuzzy: one hit -> jump straight there, otherwise open the picker
     _dev_need_fzf || return 1
     local list filtered sel count
     list="$(_dev_list)"
@@ -224,6 +254,35 @@ _dev_go() {
 cc() { _dev_go claude "$@"; }
 oc() { _dev_go opencode "$@"; }
 
+# --- fuzzy cd -----------------------------------------------------------
+
+# Direct subfolders of each group folder (e.g. work/<repo>, personal/<repo>)
+# for fcd — deliberately not a full recursive walk, since group folders can
+# be large monorepos where that's slow and mostly noise (build artifacts,
+# caches). Includes non-git folders too, unlike _dev_repos.
+_dev_dirs() {
+    local root="$(_dev_code_root)"
+    [ -d "$root" ] || return 1
+    find "$root" -mindepth 2 -maxdepth 2 -type d 2>/dev/null \
+        | sed "s|^$root/||" \
+        | sort
+}
+
+# fcd [query]: fuzzy-cd into any direct subfolder of a group folder under
+# $DEV_CODE_ROOT (e.g. work/<repo>, personal/<repo>) — just cd's, no harness.
+fcd() {
+    _dev_need_fzf || return 1
+    local root="$(_dev_code_root)"
+    if [ ! -d "$root" ]; then
+        echo "fcd: code root not found: $root (set DEV_CODE_ROOT)" >&2
+        return 1
+    fi
+    local rel
+    rel="$(_dev_dirs | fzf --query="$*" --prompt='fcd> ' --height=40% --reverse --header='cd to directory')" || return 1
+    [ -z "$rel" ] && return 1
+    cd "$root/$rel" || return 1
+}
+
 # --- bare shortcut commands ---------------------------------------------------
 
 # Look up a shortcut fresh from the conf, then cd (+ default harness).
@@ -251,7 +310,7 @@ _dev_define_shortcuts() {
     while IFS=$'\t' read -r name rpath harness; do
         if [ -z "$name" ]; then continue; fi
         case "$name" in
-            dev|cc|oc)
+            dev|cc|oc|fcd)
                 echo "dev: shortcut '$name' ignored (reserved name)" >&2
                 continue
                 ;;
