@@ -34,6 +34,14 @@ Omit the Test plan section unless the user explicitly asks for one.
 Never add it on your own judgment — not for "unusual" changes, not
 "just in case."
 
+If the branch name contains a Jira key (e.g. `feature/TGH-3550-...`),
+add a ticket reference line after the summary, with the key in square
+brackets so the Jira bot links the ticket:
+
+```
+Relates to [TGH-3550]
+```
+
 Do NOT include:
 - Emojis (unless the user asked for them)
 - Every modified filename
@@ -67,6 +75,22 @@ For work repos (hellofresh org), always pass `--draft` so the PR opens
 as a draft. Personal repos open as ready for review.
 
 Parse `PR_URL=…` and `PR_NUMBER=…` from stdout.
+
+## Squad/tribe labels (hellofresh work repos)
+
+If the repo has a `.comply.yaml` (or `.comply.yml`) at its root with
+`squad:` and `tribe:` fields, add those as GitHub labels on the PR —
+they're the repo's authoritative ownership, no need to ask:
+
+```
+gh pr edit <PR_NUMBER> --repo <org>/<repo> \
+    --add-label "squad: <squad>" --add-label "tribe: <tribe>"
+```
+
+Check the label exists first (`gh label list --repo <org>/<repo>`) —
+label text sometimes differs slightly from the comply value (spacing,
+renames). Skip silently if there's no `.comply.yaml` or no matching
+label.
 
 ## Respond to the user
 

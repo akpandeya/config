@@ -13,10 +13,12 @@ Create Jira issues. For viewing/searching/commenting, use the `jira` CLI as usua
 ```bash
 python3 ~/.claude/skills/jira-create/edit-issue.py TGH-3512 \
   --summary "New title" \
-  --body-file /tmp/body.md
+  --body-file /tmp/body.md \
+  --label DPD
 ```
 
-- At least one of `--summary`, `--body-file`, `--body` required; body uses the same markdown subset as `create-issue.py`.
+- At least one of `--summary`, `--body-file`, `--body`, `--label` required; body uses the same markdown subset as `create-issue.py`.
+- `--label` is repeatable and **replaces the issue's whole label list** — pass every label the issue should keep, not just the new one. Check current labels first with `jira issue view <key> --plain`.
 - Output: `updated  https://hellofresh.atlassian.net/browse/TGH-XXXX`. Verify with `jira issue view <key> --plain`.
 - Note: suppressing watcher notifications (`notifyUsers=false`) requires Jira admin, so there is no `--skip-notify` — edits notify watchers.
 
@@ -56,6 +58,25 @@ python3 ~/.claude/skills/jira-create/create-issue.py \
 - `--project` defaults to `TGH`.
 
 Output: `TGH-XXXX  https://hellofresh.atlassian.net/browse/TGH-XXXX`. Verify afterwards with `jira issue view <key> --plain`.
+
+## Labels (mandatory — applies to BOTH create and edit)
+
+Every ticket must get exactly one of the existing board labels, chosen by which repo/area the work touches:
+
+| Label | Use for |
+|-------|---------|
+| `3p` | `production-planning` repo, or `scm-front-apps` / squad-production-planning work — everything **except** the DPD page |
+| `DPD` | `fulfilment-demand-allocator`, `fulfilment-demand-allocation-optimizer`, or the DPD page of `scm-front-apps` |
+| `DACH` | any repo with `DACH` in its name — always this label, no exceptions |
+| `Expedite` | **almost never** — only when the user explicitly asks for it |
+
+Rules:
+
+- **On create:** always set a label per the mapping above; if it is not clear which one applies, **ask the user** — do not guess.
+- **On edit:** check the existing labels first (`jira issue view <key> --plain`).
+  - Label already present and consistent with the rules → **leave it unchanged**, do not pass `--label`, do not ask.
+  - Existing label **contradicts** the rules (e.g. DACH-repo ticket labeled `3p`, or an `Expedite` nobody asked for) → **ask the user** before changing it.
+  - No label at all → apply the mapping; if in doubt, **ask the user**.
 
 ## Defaults (per ~/.config/opencode/AGENTS.md)
 

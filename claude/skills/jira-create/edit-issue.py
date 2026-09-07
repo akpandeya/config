@@ -6,9 +6,12 @@ REST API directly, reusing create-issue.py's auth and markdown->ADF conversion.
 
 Usage:
   edit-issue.py ISSUE-KEY [--summary "New title"] [--body-file path.md] [--body "text"]
+                          [--label DPD]...
 
-At least one of --summary/--body-file/--body is required. Body supports the
+At least one of --summary/--body-file/--body/--label is required. Body supports the
 same markdown subset as create-issue.py ('## ' headings, '- ' bullets).
+--label is repeatable and REPLACES the issue's whole label list — pass every
+label the issue should keep, not just the new one.
 """
 import argparse
 import importlib.util
@@ -27,6 +30,8 @@ def main():
     p.add_argument("--summary")
     p.add_argument("--body-file", help="Markdown file replacing the description")
     p.add_argument("--body", help="Inline markdown replacing the description")
+    p.add_argument("--label", action="append", default=[],
+                   help="Repeatable; REPLACES the issue's whole label list")
     args = p.parse_args()
 
     if args.body_file and args.body:
@@ -37,8 +42,10 @@ def main():
     if args.body_file or args.body:
         text = open(args.body_file).read() if args.body_file else args.body
         fields["description"] = cji.to_adf(text)
+    if args.label:
+        fields["labels"] = args.label
     if not fields:
-        sys.exit("Nothing to update: pass at least one of --summary, --body-file, --body")
+        sys.exit("Nothing to update: pass at least one of --summary, --body-file, --body, --label")
 
     cji.req("PUT", f"/rest/api/3/issue/{args.key}", {"fields": fields})
     print(f"updated  {cji.SERVER}/browse/{args.key}")
