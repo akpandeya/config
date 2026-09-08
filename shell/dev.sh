@@ -11,7 +11,10 @@
 #                   No target: open the harness in the current directory.
 #                   Target: shortcut name, repo basename/path, group folder
 #                   (e.g. `cc work`), or fuzzy query.
+#                   Args from the first '-...' one onward are passed through
+#                   to the harness: `cc dach-pheidi --resume`, `cc --resume`.
 #   <shortcut>      e.g. `fda`: cd into the repo + its default harness.
+#                   Extra args are forwarded to the harness (`fda --resume`).
 #   fcd [query]     fuzzy-cd into a repo/folder directly under a group
 #                   folder (e.g. work/<repo>, personal/<repo>) — just cd,
 #                   no harness launch.
@@ -121,14 +124,15 @@ _dev_sel_to_rel() {
 
 _dev_launch() {
     local harness="$1" dir="$2"
+    shift 2
     if [ ! -d "$dir" ]; then
         echo "dev: no such directory: $dir" >&2
         return 1
     fi
     cd "$dir" || return 1
     case "$harness" in
-        opencode) opencode --auto ;;
-        claude)   claude --dangerously-skip-permissions ;;
+        opencode) opencode --auto "$@" ;;
+        claude)   claude --dangerously-skip-permissions "$@" ;;
         *) echo "dev: unknown harness '$harness' (expected opencode or claude)" >&2; return 1 ;;
     esac
 }
@@ -233,22 +237,33 @@ dev() {
     _dev_launch "$harness" "$root/$rel"
 }
 
+# Args are split at the first '-...' one: leading words form the target
+# query, the rest are passed through to the harness (`cc dach-pheidi --resume`).
 _dev_go() {
     local harness="$1"
     shift
-    if [ $# -eq 0 ]; then
+    local -a query_parts flags
+    query_parts=()
+    flags=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -*) flags+=("$@"); break ;;
+            *)  query_parts+=("$1"); shift ;;
+        esac
+    done
+    if [ ${#query_parts[@]} -eq 0 ]; then
         # No target: open the harness in the current directory.
         case "$harness" in
-            opencode) opencode --auto ;;
-            claude)   claude --dangerously-skip-permissions ;;
+            opencode) opencode --auto "${flags[@]}" ;;
+            claude)   claude --dangerously-skip-permissions "${flags[@]}" ;;
         esac
         return
     fi
     local rel
-    rel="$(_dev_resolve "$*")" || return 1
+    rel="$(_dev_resolve "${query_parts[*]}")" || return 1
     if [ -z "$rel" ]; then return 1; fi
     echo "dev: -> $(_dev_code_root)/$rel"
-    _dev_launch "$harness" "$(_dev_code_root)/$rel"
+    _dev_launch "$harness" "$(_dev_code_root)/$rel" "${flags[@]}"
 }
 
 cc() { _dev_go claude "$@"; }
@@ -287,13 +302,15 @@ fcd() {
 # --- bare shortcut commands ---------------------------------------------------
 
 # Look up a shortcut fresh from the conf, then cd (+ default harness).
+# Extra args are forwarded to the default harness (e.g. `fda --resume`).
 _dev_shortcut_run() {
     local target="$1"
+    shift
     local name rpath harness
     while IFS=$'\t' read -r name rpath harness; do
         if [ "$name" = "$target" ]; then
             if [ -n "$harness" ]; then
-                _dev_launch "$harness" "$(_dev_code_root)/$rpath"
+                _dev_launch "$harness" "$(_dev_code_root)/$rpath" "$@"
             else
                 cd "$(_dev_code_root)/$rpath"
             fi
@@ -319,7 +336,7 @@ _dev_define_shortcuts() {
         if whence -w "$name" >/dev/null 2>&1; then
             echo "dev: warning — shortcut '$name' shadows existing command ($(whence -w "$name"))" >&2
         fi
-        eval "${name}() { _dev_shortcut_run ${(q)name}; }"
+        eval "${name}() { _dev_shortcut_run ${(q)name} \"\$@\"; }"
     done < <(_dev_shortcuts)
 }
 

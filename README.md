@@ -68,9 +68,9 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | Command | What it does |
 |---|---|
 | `dev` / `dev <query>` | fzf over all repos, shortcuts pinned on top marked `*`, group folders (e.g. `work`, `personal`) marked `>`. `enter` asks which harness, `ctrl-o` opens opencode, `ctrl-c` opens Claude Code. |
-| `cc [target]` | Claude Code (`claude --dangerously-skip-permissions`). No target → opens in the current directory. |
-| `oc [target]` | opencode (`opencode --auto`). No target → opens in the current directory. |
-| `<shortcut>` e.g. `fda` | cd into the shortcut's repo + launch its default harness. |
+| `cc [target] [flags]` | Claude Code (`claude --dangerously-skip-permissions`). No target → opens in the current directory. Args from the first `-...` one onward are passed through: `cc dach-pheidi --resume`, `cc --resume`. |
+| `oc [target] [flags]` | opencode (`opencode --auto`). No target → opens in the current directory. Same flag passthrough as `cc`. |
+| `<shortcut>` e.g. `fda` | cd into the shortcut's repo + launch its default harness. Extra args are forwarded to the harness (`fda --resume`). |
 | `fcd [query]` | fuzzy-cd into a repo/folder directly under a group folder (`work/<repo>`, `personal/<repo>`) — just cd's, no harness. |
 
 A `target` can be a shortcut name (`cc fda`), a repo basename (`oc gambitflow`), a group folder (`cc work`, `oc personal`), a full relative path, or a fuzzy query (`cc dem and` → picker pre-filtered).
