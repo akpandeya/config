@@ -82,19 +82,21 @@ Parse `PR_URL=…` and `PR_NUMBER=…` from stdout.
 
 ## Squad/tribe labels (hellofresh work repos)
 
-If the repo has a `.comply.yaml` (or `.comply.yml`) at its root with
-`squad:` and `tribe:` fields, add those as GitHub labels on the PR —
-they're the repo's authoritative ownership, no need to ask:
+Always add these labels on every work-repo PR:
 
 ```
 gh pr edit <PR_NUMBER> --repo <org>/<repo> \
-    --add-label "squad: <squad>" --add-label "tribe: <tribe>"
+    --add-label "squad: production" --add-label "tribe: production-planning"
 ```
 
-Check the label exists first (`gh label list --repo <org>/<repo>`) —
-label text sometimes differs slightly from the comply value (spacing,
-renames). Skip silently if there's no `.comply.yaml` or no matching
-label.
+Check the labels exist first (`gh label list --repo <org>/<repo>`) —
+label text sometimes differs slightly (spacing, renames). If either
+label is missing in that repo, create it before adding it to the PR:
+
+```
+gh label create "squad: production" --repo <org>/<repo> --color "5319E7"
+gh label create "tribe: production-planning" --repo <org>/<repo> --color "EBA726"
+```
 
 ## Respond to the user
 
