@@ -372,6 +372,23 @@ for agent in ci-observer.md ci-fixer.md; do
                 "$HOME/.claude/agents/$agent"
 done
 
+# User-scoped MCP servers (available in every project on this machine).
+# `claude mcp add` writes into ~/.claude.json, which also holds
+# per-machine OAuth tokens/project history, so it isn't symlinked here —
+# each server gets its own idempotent `add` call instead.
+if command -v claude >/dev/null 2>&1; then
+    if command -v 1password-mcp >/dev/null 2>&1; then
+        if claude mcp get 1password >/dev/null 2>&1; then
+            echo "✓ 1password MCP server already registered"
+        else
+            claude mcp add -s user 1password -- 1password-mcp
+            echo "✓ 1password MCP server registered (user scope)"
+        fi
+    else
+        echo "1password-mcp not found on PATH, skipping MCP registration"
+    fi
+fi
+
 
 # Per-scope git identity + SSH signing keys. Render the repo's scoped
 # templates into ~/.gitconfig-{personal,work}; they're pulled in by the
