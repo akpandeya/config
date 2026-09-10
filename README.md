@@ -18,8 +18,8 @@ cd ~/code/personal/config
 cp gitconfig/emails.example.env gitconfig/emails.local.env
 #    ...then edit emails.local.env with your real addresses.
 
-# 4. Run the bootstrap. It installs Homebrew, packages, Jarvis, and
-#    exports SSH keys from 1Password onto disk.
+# 4. Run the bootstrap. It installs Homebrew, packages, and exports
+#    SSH keys from 1Password onto disk. Jarvis is opt-in (INSTALL_JARVIS=1).
 ./setup-dev-env.sh
 ```
 
@@ -59,7 +59,7 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
-| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, Jarvis (clone + `make install` + launchd agents). Env vars: `SKIP_JARVIS=1`, `SKIP_SCHEDULES=1` |
+| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, optional Jarvis (clone + `make install` + launchd agents). Env vars: `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_SCHEDULES=1` |
 
 ## Jumping into a repo with an AI harness (`dev`)
 
@@ -104,11 +104,17 @@ Both calls are idempotent and non-interactive, so `setup-dev-env.sh` just re-run
 ## Common operations
 
 ```bash
+# See what a full bootstrap run would do without changing anything
+DRY_RUN=1 ./setup-dev-env.sh
+
 # Re-run just the SSH setup (after adding a new key to 1Password)
 ./ssh/setup.sh
 
 # Skip SSH setup (e.g. offline, or 1Password not ready)
 SKIP_SSH=1 ./setup-dev-env.sh
+
+# Opt in to installing/scheduling Jarvis (skipped by default)
+INSTALL_JARVIS=1 ./setup-dev-env.sh
 
 # Roll back to 1Password SSH agent
 # 1. Edit ~/.ssh/config: comment out IdentityFile lines, uncomment the

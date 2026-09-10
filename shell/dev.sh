@@ -78,7 +78,7 @@ _dev_shortcuts() {
 _dev_repos() {
     local root="$(_dev_code_root)"
     [ -d "$root" ] || return 1
-    find "$root" -maxdepth 4 -name .git -prune 2>/dev/null | while IFS= read -r gitdir; do
+    find -L "$root" -maxdepth 4 -name .git -prune 2>/dev/null | while IFS= read -r gitdir; do
         print -r -- "${${gitdir%/.git}#$root/}"
     done | sort
 }
@@ -88,7 +88,7 @@ _dev_repos() {
 _dev_groups() {
     local root="$(_dev_code_root)"
     [ -d "$root" ] || return 1
-    find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r d; do
+    find -L "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r d; do
         print -r -- "${d#$root/}"
     done | sort
 }

@@ -5,10 +5,15 @@
 
 set -e
 
+DRY_RUN="${DRY_RUN:-0}"
+
 # --- OS Detection ---
 OS_TYPE="$(uname -s)"
 echo "=== Development Environment Setup ==="
 echo "OS Detected: $OS_TYPE"
+if [ "$DRY_RUN" = "1" ]; then
+    echo "=== DRY RUN — no changes will be made ==="
+fi
 echo
 
 # --- Profile Selection ---
@@ -33,8 +38,12 @@ echo
 # Check if Homebrew is installed (macOS only or Linux if brew is preferred)
 if [ "$OS_TYPE" = "Darwin" ]; then
     if ! command -v brew &> /dev/null; then
-        echo "Installing Homebrew..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        if [ "$DRY_RUN" = "1" ]; then
+            echo "Would install: Homebrew"
+        else
+            echo "Installing Homebrew..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        fi
     else
         echo "✓ Homebrew already installed"
     fi
@@ -159,6 +168,12 @@ install_package() {
 
         if $already_installed; then
             echo "✓ $pkg already installed"
+        elif [ "$DRY_RUN" = "1" ]; then
+            if $is_cask; then
+                echo "Would install: $pkg (cask)"
+            else
+                echo "Would install: $pkg"
+            fi
         else
             echo "Installing $pkg..."
             if $is_cask; then
@@ -172,6 +187,8 @@ install_package() {
         if command -v apt-get &>/dev/null; then
             if dpkg -s "$pkg" &>/dev/null; then
                 echo "✓ $pkg already installed"
+            elif [ "$DRY_RUN" = "1" ]; then
+                echo "Would install: $pkg (apt)"
             else
                 echo "Installing $pkg via apt..."
                 sudo apt-get update && sudo apt-get install -y "$pkg"
@@ -179,6 +196,8 @@ install_package() {
         elif command -v pacman &>/dev/null; then
             if pacman -Qi "$pkg" &>/dev/null; then
                 echo "✓ $pkg already installed"
+            elif [ "$DRY_RUN" = "1" ]; then
+                echo "Would install: $pkg (pacman)"
             else
                 echo "Installing $pkg via pacman..."
                 sudo pacman -S --noconfirm "$pkg"
@@ -186,6 +205,8 @@ install_package() {
         elif command -v dnf &>/dev/null; then
             if dnf list installed "$pkg" &>/dev/null; then
                 echo "✓ $pkg already installed"
+            elif [ "$DRY_RUN" = "1" ]; then
+                echo "Would install: $pkg (dnf)"
             else
                 echo "Installing $pkg via dnf..."
                 sudo dnf install -y "$pkg"
@@ -204,7 +225,13 @@ echo
 echo "=== Creating directory structure ==="
 echo
 
-if [ "$SETUP_MODE" = "personal" ]; then
+if [ "$DRY_RUN" = "1" ]; then
+    if [ "$SETUP_MODE" = "personal" ]; then
+        echo "Would create: ~/code/personal"
+    else
+        echo "Would create: ~/code/work and ~/code/personal"
+    fi
+elif [ "$SETUP_MODE" = "personal" ]; then
     mkdir -p ~/code/personal
     echo "✓ Created ~/code/personal"
 else
@@ -219,10 +246,14 @@ echo
 
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-cd "$REPO_DIR/git"
-chmod +x setup.sh
-./setup.sh
-cd "$REPO_DIR"
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Would run: $REPO_DIR/git/setup.sh (dry-run mode not supported by that script — skipped)"
+else
+    cd "$REPO_DIR/git"
+    chmod +x setup.sh
+    ./setup.sh
+    cd "$REPO_DIR"
+fi
 
 echo
 echo "=== Setting up SSH keys from 1Password ==="
@@ -230,6 +261,8 @@ echo
 
 if [ "${SKIP_SSH:-0}" = "1" ]; then
     echo "SKIP_SSH=1 — skipping SSH setup."
+elif [ "$DRY_RUN" = "1" ]; then
+    echo "Would run: $REPO_DIR/ssh/setup.sh (dry-run mode not supported by that script — skipped)"
 else
     chmod +x "$REPO_DIR/ssh/setup.sh"
     # Don't abort the whole bootstrap if SSH setup fails (e.g. 1P not
@@ -250,12 +283,20 @@ link_config() {
     local src=$1
     local target=$2
 
-    mkdir -p "$(dirname "$target")"
-
     if [ -L "$target" ] && [ "$(readlink "$target")" = "$src" ]; then
         echo "✓ $target already linked"
         return
     fi
+
+    if [ "$DRY_RUN" = "1" ]; then
+        if [ -e "$target" ] || [ -L "$target" ]; then
+            echo "Would back up existing $target"
+        fi
+        echo "Would link: $target -> $src"
+        return
+    fi
+
+    mkdir -p "$(dirname "$target")"
 
     if [ -e "$target" ] || [ -L "$target" ]; then
         local backup="${target}.backup.$(date +%Y%m%d%H%M%S)"
@@ -313,13 +354,21 @@ link_config "$REPO_DIR/gemini/package-lock.json" "$HOME/.gemini/antigravity-cli/
 
 # Install scratch dependencies for fetch_quota.js
 if [ -f "$HOME/.gemini/antigravity-cli/scratch/package.json" ]; then
-    echo "=== Installing dependencies for Antigravity CLI statusline ==="
-    (cd "$HOME/.gemini/antigravity-cli/scratch" && npm install)
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would run: npm install (Antigravity CLI statusline deps)"
+    else
+        echo "=== Installing dependencies for Antigravity CLI statusline ==="
+        (cd "$HOME/.gemini/antigravity-cli/scratch" && npm install)
+    fi
 fi
 
 
 # Antigravity personal-skills plugin setup
-mkdir -p "$HOME/.gemini/config/plugins/personal-skills/skills"
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Would create: $HOME/.gemini/config/plugins/personal-skills/skills"
+else
+    mkdir -p "$HOME/.gemini/config/plugins/personal-skills/skills"
+fi
 link_config "$REPO_DIR/claude/personal-skills-plugin.json" \
             "$HOME/.gemini/config/plugins/personal-skills/plugin.json"
 
@@ -349,11 +398,15 @@ done
 # settings.json) and, with --opencode, OpenCode (a plugin file). Idempotent
 # and non-interactive (--auto-patch), so safe to re-run on every setup.
 if command -v rtk >/dev/null 2>&1; then
-    echo "=== Setting up rtk (LLM token-saving CLI proxy) ==="
-    # Two separate calls: combining --opencode with the base call skips the
-    # Claude Code half, so each harness needs its own invocation.
-    rtk init -g --auto-patch
-    rtk init -g --opencode --auto-patch
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would run: rtk init -g --auto-patch && rtk init -g --opencode --auto-patch"
+    else
+        echo "=== Setting up rtk (LLM token-saving CLI proxy) ==="
+        # Two separate calls: combining --opencode with the base call skips the
+        # Claude Code half, so each harness needs its own invocation.
+        rtk init -g --auto-patch
+        rtk init -g --opencode --auto-patch
+    fi
 else
     echo "rtk not found on PATH, skipping rtk init (install it via brew-packages.txt)"
 fi
@@ -380,6 +433,8 @@ if command -v claude >/dev/null 2>&1; then
     if command -v 1password-mcp >/dev/null 2>&1; then
         if claude mcp get 1password >/dev/null 2>&1; then
             echo "✓ 1password MCP server already registered"
+        elif [ "$DRY_RUN" = "1" ]; then
+            echo "Would run: claude mcp add -s user 1password -- 1password-mcp"
         else
             claude mcp add -s user 1password -- 1password-mcp
             echo "✓ 1password MCP server registered (user scope)"
@@ -402,6 +457,9 @@ fi
 if [ -z "$PERSONAL_EMAIL" ]; then
     if [ -t 0 ]; then
         read -p "Personal email: " -r PERSONAL_EMAIL
+    elif [ "$DRY_RUN" = "1" ]; then
+        echo "Note: $EMAILS_ENV missing — would prompt/error here on a real run"
+        PERSONAL_EMAIL="__PERSONAL_EMAIL__"
     else
         echo "ERROR: $EMAILS_ENV missing — copy gitconfig/emails.example.env and fill it in" >&2
         exit 1
@@ -410,6 +468,9 @@ fi
 if [ "$SETUP_MODE" = "work" ] && [ -z "$WORK_EMAIL" ]; then
     if [ -t 0 ]; then
         read -p "Work email: " -r WORK_EMAIL
+    elif [ "$DRY_RUN" = "1" ]; then
+        echo "Note: WORK_EMAIL not set in $EMAILS_ENV — would prompt/error here on a real run"
+        WORK_EMAIL="__WORK_EMAIL__"
     else
         echo "ERROR: WORK_EMAIL not set in $EMAILS_ENV" >&2
         exit 1
@@ -418,6 +479,10 @@ fi
 
 render_gitconfig() {
     local src=$1 target=$2
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would render: $target"
+        return
+    fi
     # Remove any existing target FIRST — it may be a symlink into this
     # repo (older installs), and writing through it would clobber the
     # template in the repo.
@@ -435,6 +500,10 @@ render_gitconfig() {
 render_gitconfig "$REPO_DIR/gitconfig/private/.gitconfig.tmpl" "$HOME/.gitconfig-personal"
 if [ "$SETUP_MODE" = "work" ]; then
     render_gitconfig "$REPO_DIR/gitconfig/work/.gitconfig.tmpl" "$HOME/.gitconfig-work"
+elif [ "$DRY_RUN" = "1" ]; then
+    if [ -e "$HOME/.gitconfig-work" ] || [ -L "$HOME/.gitconfig-work" ]; then
+        echo "Would remove: $HOME/.gitconfig-work"
+    fi
 else
     if [ -e "$HOME/.gitconfig-work" ] || [ -L "$HOME/.gitconfig-work" ]; then
         rm -f "$HOME/.gitconfig-work"
@@ -448,6 +517,10 @@ fi
 # All idempotent — re-running this script leaves a correct config
 # unchanged.
 setup_git_global() {
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would run: git config --global ... (identity, SSH signing, allowed_signers, includeIf, defaults)"
+        return
+    fi
     # Identity: default user email based on SETUP_MODE
     git config --global user.name  "Avanindra Pandeya"
     if [ "$SETUP_MODE" = "work" ]; then
@@ -503,19 +576,27 @@ setup_git_global() {
     git config --global pull.rebase           false
 }
 setup_git_global
-echo "✓ ~/.gitconfig signing + includeIf set"
+[ "$DRY_RUN" != "1" ] && echo "✓ ~/.gitconfig signing + includeIf set"
 
 if ! grep -q 'starship init zsh' "$HOME/.zshrc" 2>/dev/null; then
-    printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
-    echo "✓ Added starship init to ~/.zshrc"
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would append: starship init to ~/.zshrc"
+    else
+        printf '\n# starship prompt\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
+        echo "✓ Added starship init to ~/.zshrc"
+    fi
 else
     echo "✓ starship init already in ~/.zshrc"
 fi
 
 ALIASES_LINE="[ -f \"$REPO_DIR/shell/aliases.sh\" ] && source \"$REPO_DIR/shell/aliases.sh\""
 if ! grep -qF "$REPO_DIR/shell/aliases.sh" "$HOME/.zshrc" 2>/dev/null; then
-    printf '\n# shared shell aliases\n%s\n' "$ALIASES_LINE" >> "$HOME/.zshrc"
-    echo "✓ Added shared aliases source to ~/.zshrc"
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would append: shared aliases source to ~/.zshrc"
+    else
+        printf '\n# shared shell aliases\n%s\n' "$ALIASES_LINE" >> "$HOME/.zshrc"
+        echo "✓ Added shared aliases source to ~/.zshrc"
+    fi
 else
     echo "✓ shared aliases already sourced in ~/.zshrc"
 fi
@@ -531,6 +612,8 @@ echo
 # this script is cheap.
 if [ "${SKIP_DESLOPPIFY:-0}" = "1" ]; then
     echo "SKIP_DESLOPPIFY=1 — skipping desloppify install."
+elif [ "$DRY_RUN" = "1" ]; then
+    echo "Would run: uv tool install --upgrade desloppify[full]"
 else
     uv tool install --upgrade "desloppify[full]"
     echo "✓ desloppify CLI installed (skill is symlinked under ~/.claude/skills/desloppify)"
@@ -540,13 +623,34 @@ else
 fi
 
 echo
+echo "=== Merging Claude Code hooks ==="
+echo
+
+# Merge the Claude Code PostToolUse hook fragment into settings.json.
+# Idempotent; preserves every other top-level key. This is a general
+# mechanism (not Jarvis-specific — e.g. claude/hooks/jarvis-register.sh
+# fails soft when Jarvis isn't running), so it runs regardless of
+# whether Jarvis itself gets installed below.
+if [ -f "$REPO_DIR/scripts/merge-claude-hooks.py" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would run: python3 $REPO_DIR/scripts/merge-claude-hooks.py"
+    else
+        python3 "$REPO_DIR/scripts/merge-claude-hooks.py"
+    fi
+fi
+
+echo
 echo "=== Installing Jarvis ==="
 echo
 
 JARVIS_DIR="$HOME/code/personal/jarvis"
 
-if [ "${SKIP_JARVIS:-0}" = "1" ]; then
-    echo "SKIP_JARVIS=1 — skipping Jarvis install."
+# Opt-in, not opt-out: Jarvis is a personal add-on, not part of the core
+# bootstrap. Set INSTALL_JARVIS=1 to clone/build/schedule it.
+if [ "${INSTALL_JARVIS:-0}" != "1" ]; then
+    echo "INSTALL_JARVIS not set — skipping Jarvis install (set INSTALL_JARVIS=1 to install)."
+elif [ "$DRY_RUN" = "1" ]; then
+    echo "Would install Jarvis: clone/build $JARVIS_DIR, jarvis init, and (unless SKIP_SCHEDULES=1) install launchd agents"
 else
     if [ ! -d "$JARVIS_DIR" ]; then
         echo "Cloning jarvis..."
@@ -568,12 +672,6 @@ else
         jarvis schedule install            # ingest every 15 min
         jarvis schedule-pr-refresh install # hourly PR refresh 09–17
         jarvis schedule-menubar install    # persistent menubar icon
-    fi
-
-    # Merge the Claude Code PostToolUse hook fragment into settings.json.
-    # Idempotent; preserves every other top-level key.
-    if [ -f "$REPO_DIR/scripts/merge-claude-hooks.py" ]; then
-        python3 "$REPO_DIR/scripts/merge-claude-hooks.py"
     fi
 
     echo "✓ Jarvis installed and initialised"
