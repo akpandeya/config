@@ -114,11 +114,15 @@ export_key() {
 }
 
 passphrase_item_title() {
-  # Dedicated Login item per key, e.g. "SSH Passphrase: HF Thinkpad".
+  # Dedicated Login item per key, e.g. "SSH Passphrase - HF Thinkpad".
   # Using a new item (not the SSH Key item) because 1Password's SSH Key
   # schema is locked — you can't just `op item edit` arbitrary fields
   # into it. Login items accept custom fields freely.
-  echo "SSH Passphrase: $1"
+  # NOTE: no colon in this title — `op read op://vault/item/field`
+  # treats ':' as an invalid character in the secret reference, so a
+  # colon here makes ensure_passphrase() always miss the item it just
+  # created (op item get by title still works; op read does not).
+  echo "SSH Passphrase - $1"
 }
 
 key_has_passphrase() {
@@ -210,6 +214,15 @@ ensure_passphrase() {
 for entry in "${KEYS[@]}"; do
   key_name="${entry%%|*}"
   op_item="${entry##*|}"
+  key_path="$SSH_DIR/$key_name"
+  # Not every machine needs every key in the list (e.g. a laptop's own
+  # key doesn't need another machine's key exported locally). Skip
+  # gracefully if it's not already cached on disk and 1Password has no
+  # matching item, instead of aborting the whole run.
+  if [ ! -f "$key_path" ] && ! op item get "$op_item" --vault "$VAULT" >/dev/null 2>&1; then
+    echo "⚠ '$op_item' not found in 1Password vault '$VAULT' and not on disk — skipping $key_name"
+    continue
+  fi
   export_key "$key_name" "$op_item"
   ensure_passphrase "$key_name" "$op_item"
 done
