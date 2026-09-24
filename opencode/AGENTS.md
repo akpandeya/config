@@ -15,5 +15,5 @@
 ## Jira ticket pickup
 When a Jira ticket is specified for pickup (starting work on it):
 1. Check assignee and status: `jira issue view <KEY>`.
-2. If it is not assigned to me, ASK whether it should be assigned to me; reassign only after confirmation: `jira issue assign <KEY> $(jira me)`.
-3. Move it to `In Progress`: `jira issue move <KEY> "In Progress"`. Board flow is Backlog → To Do → In Progress, so if the ticket is in `Backlog`, move it to `To Do` first, then to `In Progress`.
+2.  If it is not assigned to me, ASK whether it should be assigned to me; reassign only after confirmation: `jira issue assign <KEY> $(jira me)`.
+3.  Move it to `In Progress`: `jira issue move <KEY> "In Progress"`. Board flow is Backlog → To Do → In Progress, so if the ticket is in `Backlog`, move it to `To Do` first, then to `In Progress`.
