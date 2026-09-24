@@ -22,6 +22,7 @@ Your `<leader>` key is mapped to the **Spacebar** (` `).
 | `<leader>fc` (`Space + f + c`) | **Find Commands** | Search available Vim and plugin commands |
 | `<leader>fk` (`Space + f + k`) | **Find Keymaps** | Search active key combinations |
 | `<leader>e` (`Space + e`) | **Toggle Explorer** | Open/close the sidebar file tree (Neo-tree) |
+| `-` or `<leader>o` | **Oil File Manager** | Edit directory like a buffer (batch rename, delete, move) |
 | `Ctrl + j` / `Ctrl + k` | **Telescope Nav** | Move down/up the results list (inside Telescope) |
 | `Ctrl + v` | **Vert Split Open** | Open selected file in a vertical split (on the right) |
 | `Ctrl + x` | **Horiz Split Open**| Open selected file in a horizontal split (on bottom) |
@@ -30,16 +31,16 @@ Your `<leader>` key is mapped to the **Spacebar** (` `).
 ---
 
 ## 🗂️ 2. Splitting Views (Window Management)
-All split movements start with `Ctrl + w`.
+All split movements start with `Ctrl + w`, or use direct `Ctrl + h/j/k/l`.
 
 | Command / Key | Action | Description |
 |---|---|---|
+| `Ctrl + h` | **Move Left** | Direct move to left window split (no `Ctrl+w` needed) |
+| `Ctrl + j` | **Move Down** | Direct move to lower window split |
+| `Ctrl + k` | **Move Up** | Direct move to upper window split |
+| `Ctrl + l` | **Move Right** | Direct move to right window split |
 | `:vsp` / `:vsplit` | **Vertical Split** | Split window side-by-side |
 | `:sp` / `:split` | **Horizontal Split** | Split window top-to-bottom |
-| `Ctrl + w, h` | **Move Left** | Move focus to the left window split |
-| `Ctrl + w, l` | **Move Right** | Move focus to the right window split |
-| `Ctrl + w, k` | **Move Up** | Move focus to the upper window split |
-| `Ctrl + w, j` | **Move Down** | Move focus to the lower window split |
 | `Ctrl + w, c` / `:q` | **Close Split** | Close the current active split |
 | `Ctrl + w, o` | **Maximize** | Close all other splits except the active one |
 | `Ctrl + w, >` / `<` | **Resize Width** | Increase / decrease window width |
@@ -118,7 +119,8 @@ These keymaps run automatically when editing supported languages (e.g., Kotlin, 
 ## 🔁 6. Search and Replace
 *   `/text` $\rightarrow$ Search for `text` in current file.
     *   Press `n` to go to the next match, `N` to go to the previous match.
-*   `:s/old/new/g` $\rightarrow$ Replace `old` with `new` on the current line.
+    *   Press `Esc` to clear search highlights.
+*   `:s/old/new/g` $\rightarrow$ Replace `old` with `new` on the current line (with live split preview).
 *   `:%s/old/new/g` $\rightarrow$ Replace `old` with `new` in the entire file.
 *   `:%s/old/new/gc` $\rightarrow$ Replace in entire file with a prompt to confirm each change (`y` or `n`).
 
@@ -136,4 +138,17 @@ Your gutter (left margin) will show:
 | `[c` | **Prev Change** | Jump to the previous changed block of code |
 | `<leader>hp` (`Space + h + p`) | **Preview Change** | Open a popup showing the diff of the current block |
 | `<leader>hd` (`Space + h + d`) | **Diff File** | Open a side-by-side vertical diff of the current file |
+
+---
+
+## 🧰 8. Surround & Keymap Discovery (Surround & Which-Key)
+| Keybinding | Action | Description |
+|---|---|---|
+| `ysiw"` | **Surround Word** | Wrap inner word with `"` (e.g. `word` $\rightarrow$ `"word"`) |
+| `cs"'` | **Change Surround** | Change surrounding `"` to `'` |
+| `cs([` | **Change Brackets** | Change surrounding `()` to `[]` |
+| `ds"` | **Delete Surround** | Remove surrounding quotes |
+| `<leader>?` | **Which-Key** | Show interactive popup of buffer keymaps |
+| *pause on `<leader>`* | **Key Hint Popup** | Automatically pops up grouped keys |
+
 

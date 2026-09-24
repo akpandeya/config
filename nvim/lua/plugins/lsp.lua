@@ -12,10 +12,10 @@ return {
       vim.diagnostic.config({
         signs = {
           text = {
-            [vim.diagnostic.severity.ERROR] = "",
-            [vim.diagnostic.severity.WARN]  = "",
-            [vim.diagnostic.severity.INFO]  = "",
-            [vim.diagnostic.severity.HINT]  = "",
+            [vim.diagnostic.severity.ERROR] = "✘",
+            [vim.diagnostic.severity.WARN]  = "▲",
+            [vim.diagnostic.severity.INFO]  = "ℹ",
+            [vim.diagnostic.severity.HINT]  = "󰌵",
           },
         },
         virtual_text = { spacing = 2, prefix = "●" },
@@ -29,26 +29,26 @@ return {
           local map = function(lhs, rhs, desc)
             vim.keymap.set("n", lhs, rhs, { buffer = ev.buf, silent = true, desc = desc })
           end
-          map("gd",         vim.lsp.buf.definition,      "LSP: definition")
-          map("gr",         vim.lsp.buf.references,      "LSP: references")
-          map("gi",         vim.lsp.buf.implementation,  "LSP: implementation")
-          map("K",          vim.lsp.buf.hover,           "LSP: hover")
-          map("<leader>rn", vim.lsp.buf.rename,          "LSP: rename")
-          map("<leader>ca", vim.lsp.buf.code_action,     "LSP: code action")
-          map("[d",         vim.diagnostic.goto_prev,    "Diagnostic: prev")
-          map("]d",         vim.diagnostic.goto_next,    "Diagnostic: next")
+          map("gd",         "<cmd>Telescope lsp_definitions<cr>",      "LSP: definition")
+          map("gr",         "<cmd>Telescope lsp_references<cr>",       "LSP: references")
+          map("gi",         "<cmd>Telescope lsp_implementations<cr>",  "LSP: implementation")
+          map("K",          vim.lsp.buf.hover,                         "LSP: hover")
+          map("<leader>rn", vim.lsp.buf.rename,                        "LSP: rename")
+          map("<leader>ca", vim.lsp.buf.code_action,                   "LSP: code action")
+          map("[d",         vim.diagnostic.goto_prev,                  "Diagnostic: prev")
+          map("]d",         vim.diagnostic.goto_next,                  "Diagnostic: next")
           map("<leader>f",  function() vim.lsp.buf.format({ async = true }) end, "LSP: format")
         end,
       })
 
-      vim.lsp.config("kotlin_language_server", {
+      vim.lsp.config("kotlin", {
+        cmd = { "kotlin-lsp", "--stdio" },
+        filetypes = { "kotlin" },
+        root_markers = { "settings.gradle.kts", "build.gradle.kts", "pom.xml", ".git" },
         single_file_support = false,
-        init_options = {
-          storagePath = vim.fn.stdpath("cache") .. "/kotlin_language_server"
-        }
       })
 
-      vim.lsp.enable({ "basedpyright", "kotlin_language_server", "marksman" })
+      vim.lsp.enable({ "basedpyright", "kotlin", "marksman" })
     end,
   },
 }

@@ -8,7 +8,7 @@ return {
     "williamboman/mason-lspconfig.nvim",
     dependencies = { "williamboman/mason.nvim" },
     opts = {
-      ensure_installed = { "basedpyright", "kotlin_language_server", "marksman" },
+      ensure_installed = { "basedpyright", "marksman" },
       automatic_installation = true,
     },
   },
