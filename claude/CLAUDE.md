@@ -23,3 +23,5 @@
   3. Move it to `In Progress`: `jira issue move <KEY> "In Progress"`. Board flow is Backlog → To Do → In Progress, so if the ticket is in `Backlog`, move it to `To Do` first, then to `In Progress`.
 
 @RTK.md
+
+@/Users/avanindra.pandeya/.hf-context/AGENTS.md
