@@ -60,6 +60,7 @@ if [ -n "$ZSH_VERSION" ]; then
     # shortcuts defined in dev-shortcuts.conf). zsh only.
     _aliases_dir="${${(%):-%x}:A:h}"
     [ -f "$_aliases_dir/dev.sh" ] && source "$_aliases_dir/dev.sh"
+    [ -f "$_aliases_dir/pg.sh" ] && source "$_aliases_dir/pg.sh"
     unset _aliases_dir
 fi
 

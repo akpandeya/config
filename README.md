@@ -75,6 +75,15 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 
 A `target` can be a shortcut name (`cc fda`), a repo basename (`oc gambitflow`), a group folder (`cc work`, `oc personal`), a full relative path, or a fuzzy query (`cc dem and` → picker pre-filtered).
 
+## Postgres (`fpsql`)
+
+`shell/pg.sh` (sourced via `shell/aliases.sh`, zsh only) reads `$PGSERVICEFILE` (default `~/.pg_service.conf` — symlinked from hf-workbench).
+
+| Command | What it does |
+|---|---|
+| `fpsql [query] [flags]` | fzf over the `[stanza]` names, then `psql service=<name>`. Exact stanza name jumps straight in; args from the first `-...` one onward go to psql (`fpsql nomos -c '\dt'`). |
+| `psql service=<TAB>` | tab-completes service names from the same file (other psql args fall through to the stock completion). |
+
 ### Add a new shortcut
 
 1. Add one line to `shell/dev-shortcuts.conf`:
