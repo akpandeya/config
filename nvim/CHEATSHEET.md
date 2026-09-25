@@ -21,6 +21,7 @@ Your `<leader>` key is mapped to the **Spacebar** (` `).
 | `<leader>/` (`Space + /`) | **Fuzzy Search** | Search text inside the active buffer |
 | `<leader>fc` (`Space + f + c`) | **Find Commands** | Search available Vim and plugin commands |
 | `<leader>fk` (`Space + f + k`) | **Find Keymaps** | Search active key combinations |
+| `<leader>fd` (`Space + f + d`) | **Diff Current File** | Fuzzy-find a file, open it in a vertical `diffsplit` against the current file |
 | `<leader>e` (`Space + e`) | **Toggle Explorer** | Open/close the sidebar file tree (Neo-tree) |
 | `-` or `<leader>o` | **Oil File Manager** | Edit directory like a buffer (batch rename, delete, move) |
 | `Ctrl + j` / `Ctrl + k` | **Telescope Nav** | Move down/up the results list (inside Telescope) |

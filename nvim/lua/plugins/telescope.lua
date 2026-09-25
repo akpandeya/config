@@ -21,6 +21,7 @@ return {
       { "<leader>/",  "<cmd>Telescope current_buffer_fuzzy_find<cr>", desc = "Fuzzy in buffer" },
       { "<leader>fc", "<cmd>Telescope commands<cr>", desc = "Find commands" },
       { "<leader>fk", "<cmd>Telescope keymaps<cr>",  desc = "Find keymaps" },
+      { "<leader>fd", "<cmd>DiffFiles<cr>",          desc = "Diff current file against..." },
     },
     config = function()
       local telescope = require("telescope")
@@ -48,6 +49,44 @@ return {
 
       vim.api.nvim_create_user_command("GrepFiles", function()
         grep_files_with_matches()
+      end, {})
+
+      -- Fuzzy-find a file and open it in a vertical diffsplit against the
+      -- file that was current when the picker was launched.
+      local function diff_with_file(opts)
+        opts = opts or {}
+        local origin_win = vim.api.nvim_get_current_win()
+        local origin_bufnr = vim.api.nvim_get_current_buf()
+
+        local builtin = require("telescope.builtin")
+        local actions = require("telescope.actions")
+        local action_state = require("telescope.actions.state")
+
+        builtin.find_files(vim.tbl_extend("force", opts, {
+          prompt_title = "Diff current file against...",
+          attach_mappings = function(prompt_bufnr, _)
+            actions.select_default:replace(function()
+              local entry = action_state.get_selected_entry()
+              actions.close(prompt_bufnr)
+              if not entry then return end
+
+              if vim.api.nvim_win_is_valid(origin_win) then
+                vim.api.nvim_set_current_win(origin_win)
+              end
+              if vim.api.nvim_buf_is_valid(origin_bufnr) then
+                vim.api.nvim_set_current_buf(origin_bufnr)
+              end
+
+              vim.cmd("diffthis")
+              vim.cmd("vertical diffsplit " .. vim.fn.fnameescape(entry.path or entry.value))
+            end)
+            return true
+          end,
+        }))
+      end
+
+      vim.api.nvim_create_user_command("DiffFiles", function()
+        diff_with_file()
       end, {})
 
       telescope.setup({
