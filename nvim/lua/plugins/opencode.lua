@@ -8,7 +8,13 @@ return {
       { "<leader>as", function() require("opencode").select() end, mode = { "n", "x" }, desc = "Select OpenCode action" },
     },
     config = function()
-      vim.g.opencode_opts = {}
+      vim.g.opencode_opts = {
+        server = {
+          start = function()
+            vim.cmd("vsplit term://opencode --auto | wincmd p")
+          end,
+        },
+      }
     end,
   },
 }

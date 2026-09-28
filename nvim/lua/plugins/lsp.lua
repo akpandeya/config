@@ -24,6 +24,30 @@ return {
 
       vim.lsp.config("*", { capabilities = capabilities })
 
+      vim.api.nvim_create_user_command("LspRestart", function()
+        for _, client in ipairs(vim.lsp.get_clients({ bufnr = 0 })) do
+          vim.lsp.stop_client(client.id, false)
+        end
+        vim.cmd("edit")
+      end, { desc = "Restart LSP clients attached to current buffer" })
+
+      vim.api.nvim_create_user_command("LspStop", function(opts)
+        local clients = vim.lsp.get_clients({ bufnr = 0, name = opts.args ~= "" and opts.args or nil })
+        for _, client in ipairs(clients) do
+          vim.lsp.stop_client(client.id, false)
+        end
+      end, { nargs = "?", desc = "Stop LSP clients attached to current buffer" })
+
+      vim.api.nvim_create_user_command("LspStart", function()
+        vim.cmd("edit")
+      end, { desc = "Start LSP client for current buffer" })
+
+      vim.api.nvim_create_user_command("LspLog", function()
+        vim.cmd("tabnew " .. vim.lsp.get_log_path())
+      end, { desc = "Open LSP log" })
+
+      vim.api.nvim_create_user_command("LspInfo", "checkhealth vim.lsp", { desc = "LSP info" })
+
       vim.api.nvim_create_autocmd("LspAttach", {
         callback = function(ev)
           local map = function(lhs, rhs, desc)
