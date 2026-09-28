@@ -5,6 +5,7 @@ return {
     opts = {
       preset = "modern",
       spec = {
+        { "<leader>a", group = "AI" },
         { "<leader>f", group = "Find / Telescope" },
         { "<leader>c", group = "Cheatsheet / Code" },
         { "<leader>h", group = "Git Hunk" },

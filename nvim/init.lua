@@ -12,6 +12,10 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
+local ai = require("ai-terminals")
+vim.keymap.set("n", "<leader>ap", ai.copilot, { desc = "Copilot CLI" })
+vim.keymap.set("n", "<leader>ag", ai.agy, { desc = "Gemini CLI" })
+
 require("lazy").setup("plugins", {
   change_detection = { notify = false },
 })
