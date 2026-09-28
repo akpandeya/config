@@ -5,6 +5,9 @@
 #                   `psql service=<name>`. Args from the first '-...' one
 #                   onward are passed through to psql:
 #                   `fpsql envelope-man -c '\dt'`.
+#   fpsql -e [query]  same picker, but opens the per-service SQL scratchpad
+#                   in nvim (~/.local/share/nvim/sql-scratch/<name>.sql)
+#                   bound to the service via vim-dadbod (:SqlScratch).
 #   psql service=<TAB>  completes stanza names from the same file.
 
 # zsh only (completion registration + ${(q) quoting)
@@ -28,14 +31,20 @@ _pg_services() {
     ' "$conf"
 }
 
-# fpsql [query]: fuzzy-pick a service, then exec psql against it.
-# Words before the first '-...' form the fzf pre-query (exact stanza name
-# jumps straight in), the rest go to psql (`fpsql nomos -c '\dt'`).
+# fpsql [-e] [query]: fuzzy-pick a service, then open psql (or, with -e, the
+# per-service nvim scratchpad) against it. Words before the first '-...' form
+# the fzf pre-query (exact stanza name jumps straight in), the rest go to psql
+# (`fpsql nomos -c '\dt'`).
 fpsql() {
     command -v fzf >/dev/null 2>&1 || {
         echo "fpsql: fzf not found — install it with: brew install fzf" >&2
         return 1
     }
+    local edit_mode=0
+    if [ "$1" = "-e" ]; then
+        edit_mode=1
+        shift
+    fi
     local -a query_parts flags
     query_parts=()
     flags=()
@@ -56,6 +65,11 @@ fpsql() {
     fi
     [ -z "$sel" ] && return 1
     sel="${sel%%$'\t'*}"
+    if [ "$edit_mode" -eq 1 ]; then
+        echo "fpsql: -> nvim +SqlScratch $sel"
+        nvim "+SqlScratch $sel"
+        return
+    fi
     echo "fpsql: -> psql service=$sel"
     psql "service=$sel" "${flags[@]}"
 }

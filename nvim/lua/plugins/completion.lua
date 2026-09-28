@@ -18,7 +18,7 @@ return {
           expand = function(args) luasnip.lsp_expand(args.body) end,
         },
         mapping = cmp.mapping.preset.insert({
-          ["<C-Space>"] = cmp.mapping.complete(),
+          ["<C-y>"]     = cmp.mapping.complete(),
           ["<CR>"]      = cmp.mapping.confirm({ select = true }),
           ["<Tab>"] = cmp.mapping(function(fallback)
             if cmp.visible() then
@@ -45,6 +45,15 @@ return {
         }, {
           { name = "buffer" },
           { name = "path" },
+        }),
+      })
+
+      -- SQL: complete tables/columns from the buffer's dadbod connection.
+      cmp.setup.filetype({ "sql" }, {
+        sources = cmp.config.sources({
+          { name = "vim-dadbod-completion" },
+        }, {
+          { name = "buffer" },
         }),
       })
     end,
