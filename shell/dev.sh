@@ -5,9 +5,10 @@
 #                   ~/code), shortcuts pinned on top marked "*", group
 #                   folders (e.g. work, personal) marked ">".
 #                   enter asks for a harness, ctrl-o = opencode,
-#                   ctrl-c = Claude Code.
+#                   ctrl-c = Claude Code, ctrl-n = nvim.
 #   cc [target]     Claude Code (claude --dangerously-skip-permissions)
 #   oc [target]     opencode (opencode --auto)
+#   nv [target]     nvim
 #                   No target: open the harness in the current directory.
 #                   Target: shortcut name, repo basename/path, group folder
 #                   (e.g. `cc work`), or fuzzy query.
@@ -133,18 +134,20 @@ _dev_launch() {
     case "$harness" in
         opencode) opencode --auto "$@" ;;
         claude)   claude --dangerously-skip-permissions "$@" ;;
-        *) echo "dev: unknown harness '$harness' (expected opencode or claude)" >&2; return 1 ;;
+        nvim)     nvim "$@" ;;
+        *) echo "dev: unknown harness '$harness' (expected opencode, claude or nvim)" >&2; return 1 ;;
     esac
 }
 
 _dev_pick_harness() {
     local choice
     while true; do
-        read -k 1 "choice?Harness: [o]pencode / [c]laude / [q]uit? "
+        read -k 1 "choice?Harness: [o]pencode / [c]laude / [n]vim / [q]uit? "
         echo
         case "$choice" in
             o|O) print -r -- opencode; return 0 ;;
             c|C) print -r -- claude;   return 0 ;;
+            n|N) print -r -- nvim;     return 0 ;;
             q|Q|$'\n'|$'\r') return 1 ;;
         esac
     done
@@ -219,9 +222,9 @@ dev() {
         return 1
     fi
     local out key sel rel harness
-    out="$(_dev_list | fzf --expect=ctrl-o,ctrl-c --query="$*" \
+    out="$(_dev_list | fzf --expect=ctrl-o,ctrl-c,ctrl-n --query="$*" \
         --prompt='dev> ' --height=40% --reverse \
-        --header='enter: pick harness | ctrl-o: opencode | ctrl-c: claude')" || return 0
+        --header='enter: pick harness | ctrl-o: opencode | ctrl-c: claude | ctrl-n: nvim')" || return 0
     key="$(head -n 1 <<< "$out")"
     sel="$(sed -n 2p <<< "$out")"
     if [ -z "$sel" ]; then return 0; fi
@@ -229,6 +232,7 @@ dev() {
     case "$key" in
         ctrl-o) harness=opencode ;;
         ctrl-c) harness=claude ;;
+        ctrl-n) harness=nvim ;;
         *)
             harness="$(_dev_pick_harness)" || { echo "dev: cancelled"; return 0; }
             ;;
@@ -256,6 +260,7 @@ _dev_go() {
         case "$harness" in
             opencode) opencode --auto "${flags[@]}" ;;
             claude)   claude --dangerously-skip-permissions "${flags[@]}" ;;
+            nvim)     nvim "${flags[@]}" ;;
         esac
         return
     fi
@@ -268,6 +273,7 @@ _dev_go() {
 
 cc() { _dev_go claude "$@"; }
 oc() { _dev_go opencode "$@"; }
+nv() { _dev_go nvim "$@"; }
 
 # --- fuzzy cd -----------------------------------------------------------
 
@@ -328,7 +334,7 @@ _dev_define_shortcuts() {
     while IFS=$'\t' read -r name rpath harness; do
         if [ -z "$name" ]; then continue; fi
         case "$name" in
-            dev|cc|oc|fcd)
+            dev|cc|oc|nv|fcd)
                 echo "dev: shortcut '$name' ignored (reserved name)" >&2
                 continue
                 ;;
