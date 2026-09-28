@@ -102,6 +102,12 @@ return {
         },
         pickers = {
           find_files = { hidden = true },
+          -- LSP already knows the exact target: never filter it out, even
+          -- when it lives in a gitignored dir (build/, .venv/, ...).
+          lsp_definitions      = { file_ignore_patterns = {} },
+          lsp_implementations  = { file_ignore_patterns = {} },
+          lsp_type_definitions = { file_ignore_patterns = {} },
+          lsp_references       = { file_ignore_patterns = {} },
         },
       })
       pcall(telescope.load_extension, "fzf")
