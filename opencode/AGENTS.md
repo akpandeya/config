@@ -1,5 +1,10 @@
 # Global Rules
 
+## Communication style
+- Be brief and to the point. Give the shortest answer that fully solves the task; skip preamble, summaries, and explanations unless I ask for detail.
+- Use plain, simple language. No jargon unless the repo/team already uses the term; if a term is unavoidable, say what it means in a few words.
+- Only expand into long explanations when I explicitly ask (e.g. "explain", "why", "be verbose").
+
 ## GitHub PR comments
 - NEVER post replies to GitHub PR review comments directly (no `gh api` reply calls, no comment submissions, ever).
 - When a review comment needs a response, draft the reply text and present it in the session for me to review and post myself.
