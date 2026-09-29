@@ -82,7 +82,10 @@ A `target` can be a shortcut name (`cc fda`), a repo basename (`oc gambitflow`),
 | Command | What it does |
 |---|---|
 | `fpsql [query] [flags]` | fzf over the `[stanza]` names, then `psql service=<name>`. Exact stanza name jumps straight in; args from the first `-...` one onward go to psql (`fpsql nomos -c '\dt'`). |
+| `fpsql -e [query]` | same picker, but opens the per-service SQL scratchpad in nvim bound to the service via vim-dadbod (`:SqlScratch`). |
 | `psql service=<TAB>` | tab-completes service names from the same file (other psql args fall through to the stock completion). |
+
+In nvim, `:SqlScratch` / `:SqlHistory` also cover two CLI-backed backends besides the pg services: `snowflake:hf` (runs `snow sql -c hf -f`, SSO browser on first query of a session) and `databricks:photon` (runs `hf-photon -f`). They're custom dadbod adapters in `nvim/autoload/db/adapter/` — scratch + run-in-buffer only, no DBUI schema tree. Executed queries are logged to `~/.local/share/nvim/sql-history/`.
 
 ### Add a new shortcut
 

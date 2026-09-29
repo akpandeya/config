@@ -1,8 +1,10 @@
 -- Database tooling: vim-dadbod + UI + completion.
 --
--- Connections come from the same pg_service.conf that drives `fpsql`
--- (shell/pg.sh) — parsed into g:dbs as `postgres://?service=<name>` URLs so
--- psql/libpq keeps resolving hosts/auth exactly like the CLI does.
+-- Postgres connections come from the same pg_service.conf that drives
+-- `fpsql` (shell/pg.sh) — parsed into g:dbs as `postgres://?service=<name>`
+-- URLs so psql/libpq keeps resolving hosts/auth exactly like the CLI does.
+-- Snowflake + Databricks are extra_connections: CLI-shelling dadbod adapters
+-- (autoload/db/adapter/*.vim → `snow sql` / `hf-photon`), scratch + run only.
 --
 --   :DBUI                 schema browser (<leader>D)
 --   :SqlScratch [service] per-service scratch buffer (b:db pre-bound)
@@ -28,23 +30,54 @@ local function db_url(service)
   return "postgres://?service=" .. service
 end
 
+-- Non-Postgres backends, reached through CLI-shelling dadbod adapters
+-- (nvim/autoload/db/adapter/{snowflake,databricks}.vim). DBUI lists them but
+-- there's no schema tree behind them — scratch + run only.
+local extra_connections = {
+  ["snowflake:hf"] = "snowflake:hf",
+  ["databricks:photon"] = "databricks:photon",
+}
+
+local function conn_url(name)
+  return extra_connections[name] or db_url(name)
+end
+
+-- pg services + CLI-backed connections, for pickers and completion.
+local function connections()
+  local names = services()
+  for name in pairs(extra_connections) do
+    table.insert(names, name)
+  end
+  table.sort(names)
+  return names
+end
+
 -- Query history: every executed query is appended to a per-service log in
 -- stdpath("data")/sql-history, so past queries survive scratch overwrites.
 local history_dir = vim.fn.stdpath("data") .. "/sql-history"
 
 local function history_path(url)
+  -- pg service URLs and the snowflake:hf / databricks:photon labels are all
+  -- credential-free; raw URLs may carry credentials in userinfo — strip
+  -- those before using the URL as a filename.
   local service = url and url:match("service=([^&]+)")
+  if not service and url and url:match("^[%w_]+:[%w_-]+$") then
+    service = url:gsub(":", "-")
+  end
   if not service then
-    -- Never log raw URLs: they may carry credentials in userinfo.
     service = (url or "unknown"):gsub("://[^/@]*@", "://@"):gsub("[^%w%-_]", "_")
   end
   return history_dir .. "/" .. service .. ".sql", service
 end
 
--- Fires on User *DBExecutePost; the current buffer is the result buffer whose
--- b:db is dadbod's query dict ({db_url, input=temp file with the query, ...}).
-local function log_query()
-  local d = vim.b.db
+-- Fires on User <outfile>.dbout/DBExecutePost. The current buffer at that
+-- point is the SQL buffer, so resolve the dbout buffer from the event match
+-- and read dadbod's query dict ({db_url, input=query file, ...}) off it.
+local function log_query(ev)
+  local output = ev.match:match("^(.*)/DBExecutePost$")
+  local buf = output and vim.fn.bufnr(output) or -1
+  if buf < 0 then return end
+  local d = vim.fn.getbufvar(buf, "db")
   if type(d) ~= "table" then return end
   local f = io.open(d.input or "", "r")
   if not f then return end
@@ -61,7 +94,7 @@ local function log_query()
 end
 
 local function open_history(service)
-  local path = history_path(db_url(service))
+  local path = history_path(conn_url(service))
   if vim.fn.filereadable(path) == 0 then
     vim.notify("No query history for " .. service, vim.log.levels.WARN)
     return
@@ -78,6 +111,9 @@ local function setup_connections()
   for _, name in ipairs(services()) do
     dbs[name] = db_url(name)
   end
+  for name, url in pairs(extra_connections) do
+    dbs[name] = url
+  end
   if next(dbs) ~= nil then vim.g.dbs = dbs end
 end
 
@@ -87,16 +123,16 @@ local function open_scratch(service)
   require("lazy").load({ plugins = { "vim-dadbod" } })
   local dir = vim.fn.stdpath("data") .. "/sql-scratch"
   vim.fn.mkdir(dir, "p")
-  local path = dir .. "/" .. service .. ".sql"
+  local path = dir .. "/" .. service:gsub(":", "-") .. ".sql"
   vim.cmd.edit(vim.fn.fnameescape(path))
   vim.bo.filetype = "sql"
-  vim.b.db = db_url(service)
+  vim.b.db = conn_url(service)
 end
 
 local function pick_service(cb)
   local ok, pickers = pcall(require, "telescope.pickers")
   if not ok then
-    vim.ui.select(services(), { prompt = "Service:" }, cb)
+    vim.ui.select(connections(), { prompt = "Service:" }, cb)
     return
   end
   local finders = require("telescope.finders")
@@ -106,7 +142,7 @@ local function pick_service(cb)
 
   pickers.new({}, {
     prompt_title = "Service",
-    finder = finders.new_table({ results = services() }),
+    finder = finders.new_table({ results = connections() }),
     sorter = conf.generic_sorter({}),
     previewer = false,
     attach_mappings = function(prompt_bufnr, _)
@@ -181,8 +217,8 @@ return {
 
       vim.api.nvim_create_user_command("SqlScratch", sql_scratch, {
         nargs = "?",
-        complete = function() return services() end,
-        desc = "Open per-service SQL scratch buffer bound to a pg service",
+        complete = function() return connections() end,
+        desc = "Open per-service SQL scratch buffer bound to a connection",
       })
 
       vim.api.nvim_create_user_command("SqlHistory", function(args)
@@ -193,7 +229,7 @@ return {
         end
       end, {
         nargs = "?",
-        complete = function() return services() end,
+        complete = function() return connections() end,
         desc = "Open per-service executed-query history",
       })
 
