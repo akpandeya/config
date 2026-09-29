@@ -15,6 +15,11 @@ claude-glm() {
 mdserve() {
     local dir="${1:-.}"
     dir="$(cd "$dir" 2>/dev/null && pwd)" || { echo "mdserve: no such directory: ${1:-.}" >&2; return 1; }
+    # One mdserve at a time: a server already on :8642 may be serving a
+    # different directory, so kill it and restart with the new one.
+    # [m]kdocs: the bracket keeps this pattern from matching the command
+    # line of the very shell running it (pkill -f matches full cmdlines).
+    pkill -f "[m]kdocs serve.*localhost:8642" 2>/dev/null
     local tmp
     tmp="$(mktemp -d)" || return 1
     cat > "$tmp/mkdocs.yml" <<EOF

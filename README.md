@@ -108,6 +108,8 @@ Nothing extra to do: `setup-dev-env.sh` installs `fzf` and `anomalyco/tap/openco
 
 `mdserve [dir]` (in `shell/aliases.sh`) serves any folder of markdown as a browsable site at `localhost:8642` — clickable relative `./x.md#anchor` links, mermaid diagrams rendered, live reload on save. It generates a throwaway mkdocs config (material theme, dark), so no per-project setup. Backed by `mkdocs` + `mkdocs-material`, installed by `setup-dev-env.sh` via `uv tool install mkdocs --with mkdocs-material`.
 
+In nvim, `<leader>mb` in a markdown buffer starts mdserve on the current file's directory and opens the browser once the server is up. Only one mdserve runs at a time: a server already on :8642 gets killed and restarted with the new directory.
+
 ## rtk (token-saving CLI proxy)
 
 [`rtk`](https://www.rtk-ai.app/) filters/summarizes noisy command output (git, gh, docker, test runners, ...) before it reaches the LLM. It's wired into both harnesses:
