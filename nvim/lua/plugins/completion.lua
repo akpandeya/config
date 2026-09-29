@@ -49,8 +49,13 @@ return {
       })
 
       -- SQL: complete tables/columns from the buffer's dadbod connection.
+      -- db-catalogue is our own source for the CLI adapters (databricks /
+      -- snowflake): their fully-qualified catalogue names never match
+      -- vim-dadbod-completion's anchored filter when typing a fragment.
+      cmp.register_source("db-catalogue", require("db-catalogue-cmp").new())
       cmp.setup.filetype({ "sql" }, {
         sources = cmp.config.sources({
+          { name = "db-catalogue" },
           { name = "vim-dadbod-completion" },
         }, {
           { name = "buffer" },

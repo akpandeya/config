@@ -12,3 +12,12 @@ endfunction
 function! db#adapter#databricks#auth_input() abort
   return v:false
 endfunction
+
+" Browsable table list for DBUI + dadbod-completion: fully-qualified names
+" from a curated catalogue file (scripts/refresh-db-catalogue.sh, run via
+" :SqlCatalogueRefresh). The glue catalog has ~1000 schemas and no
+" information_schema, so a live SHOW TABLES sweep here would block nvim.
+function! db#adapter#databricks#tables(conn) abort
+  let catalogue = expand('~/.local/share/nvim/db-catalogue/databricks.tables')
+  return filereadable(catalogue) ? readfile(catalogue) : []
+endfunction
