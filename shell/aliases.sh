@@ -8,6 +8,36 @@ claude-glm() {
     claude --model bedrock/zai.glm-5 "$@"
 }
 
+# mdserve <dir>: serve any folder of markdown as a browsable site
+# (mkdocs + material theme). Relative ./x.md#anchor links and mermaid
+# diagrams render; live-reloads on save. Uses a throwaway mkdocs.yml so
+# no per-project config is needed. Requires: uv tool install mkdocs --with mkdocs-material
+mdserve() {
+    local dir="${1:-.}"
+    dir="$(cd "$dir" 2>/dev/null && pwd)" || { echo "mdserve: no such directory: ${1:-.}" >&2; return 1; }
+    local tmp
+    tmp="$(mktemp -d)" || return 1
+    cat > "$tmp/mkdocs.yml" <<EOF
+site_name: markdown preview
+docs_dir: $dir
+theme:
+  name: material
+  palette:
+    scheme: slate
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - tables
+  - toc:
+      permalink: true
+EOF
+    mkdocs serve --config-file "$tmp/mkdocs.yml" -a localhost:8642
+    rm -rf "$tmp"
+}
+
 # himalaya-vim: jump straight into the unread listing for an account.
 # Toggle to all / back inside the buffer with `a` / `u`.
 alias mp='nvim +"HimalayaAccountUnread personal"'

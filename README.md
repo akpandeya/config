@@ -104,6 +104,10 @@ Edit `shell/dev.sh`: the `case` in `_dev_launch` (repo jumps) and the no-arg `ca
 
 Nothing extra to do: `setup-dev-env.sh` installs `fzf` and `anomalyco/tap/opencode` from `brew-packages.txt` and wires `shell/aliases.sh` into `~/.zshrc`, which sources `dev.sh`. Claude Code itself is installed by its native installer, not Homebrew.
 
+## Markdown site preview (`mdserve`)
+
+`mdserve [dir]` (in `shell/aliases.sh`) serves any folder of markdown as a browsable site at `localhost:8642` — clickable relative `./x.md#anchor` links, mermaid diagrams rendered, live reload on save. It generates a throwaway mkdocs config (material theme, dark), so no per-project setup. Backed by `mkdocs` + `mkdocs-material`, installed by `setup-dev-env.sh` via `uv tool install mkdocs --with mkdocs-material`.
+
 ## rtk (token-saving CLI proxy)
 
 [`rtk`](https://www.rtk-ai.app/) filters/summarizes noisy command output (git, gh, docker, test runners, ...) before it reaches the LLM. It's wired into both harnesses:

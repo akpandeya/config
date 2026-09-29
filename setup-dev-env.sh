@@ -623,6 +623,20 @@ else
 fi
 
 echo
+echo "=== Installing mkdocs (mdserve) ==="
+echo
+
+# Backs the `mdserve` shell function (shell/aliases.sh): serves any folder
+# of markdown as a browsable site with working links + mermaid rendering.
+# `uv tool install --upgrade` is a no-op when already current.
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Would run: uv tool install --upgrade mkdocs --with mkdocs-material"
+else
+    uv tool install --upgrade mkdocs --with mkdocs-material
+    echo "✓ mkdocs + material installed (usage: mdserve <dir>)"
+fi
+
+echo
 echo "=== Merging Claude Code hooks ==="
 echo
 
