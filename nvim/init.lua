@@ -19,3 +19,5 @@ vim.keymap.set("n", "<leader>ag", ai.agy, { desc = "Gemini CLI" })
 require("lazy").setup("plugins", {
   change_detection = { notify = false },
 })
+
+require("pyscratch")

@@ -47,6 +47,10 @@ snow sql -c hf --format csv -q "..." > output.csv
 - If you see `390195 (08001): Authentication token has expired`, just rerun — the next call will reauthenticate.
 - Don't edit `~/Library/Application Support/snowflake/config.toml` to add passwords or keys — this user is on SSO.
 
+## Python / DataFrames
+
+If the task is Python-side (pandas, or joins across snowflake/databricks/postgres), don't pipe CSVs through `snow sql`: use `hf-df` / `bin/db.py` from hf-workbench. `read_sql(sql, "sf")` returns a DataFrame via the same cached SSO token, and `duck(**dfs)` joins DataFrames from different backends in DuckDB. See the hf-workbench README "hf-df" section.
+
 ## Common HF references
 
 - Forecasts: `US_OPS_ANALYTICS.FORECAST.MV_HF_FORECAST_RECIPES`

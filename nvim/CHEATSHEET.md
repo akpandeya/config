@@ -152,4 +152,18 @@ Your gutter (left margin) will show:
 | `<leader>?` | **Which-Key** | Show interactive popup of buffer keymaps |
 | *pause on `<leader>`* | **Key Hint Popup** | Automatically pops up grouped keys |
 
+---
+
+## 🗄️ 9. Database & Python Scratch
+| Command / Key | Action | Description |
+|---|---|---|
+| `<leader>D` (`Space + D`) | **DB Browser** | Toggle the DBUI drawer (connections from `pg_service.conf` + snowflake/databricks) |
+| `:SqlScratch [svc]` | **SQL Scratch** | Per-service `.sql` buffer pre-bound to a connection |
+| `:SqlHistory [svc]` | **Query History** | Every query you executed against a service |
+| `:SqlCatalogueRefresh` | **Refresh Catalogues** | Rebuild the sf/dbx/pg table+column lists behind completion |
+| `<leader>E` (`Space + E`) | **Execute** | sql buffer: run line / selection · py-scratch: run with the shared venv in a split; focus stays in the scratch, `q` closes the output |
+| `:PyScratch` | **Python Scratch** | No arg: picker over this project's scratches (+ "new"). `:PyScratch [plain\|sql\|blank] [name]` — e.g. `:PyScratch sql` opens `sql.py` with `read_sql`/`duck` pre-imported; autosaves, survives exit |
+| `:DBBackend [name]` | **Set Backend** | `sf` · `dbx` · `pg:<service>` — drives SQL completion in this python buffer (persistent alternative: a `# backend: <name>` comment at the top of the file) |
+| *(typing in `read_sql("…")`)* | **SQL Autocomplete** | Table names (all backends) + column names (pg) complete inside the string |
+
 

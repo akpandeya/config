@@ -61,6 +61,23 @@ return {
           { name = "buffer" },
         }),
       })
+
+      -- Python: SQL completion only inside read_sql-style strings
+      -- (treesitter gate in db-python.lua; backend from "# backend:" /
+      -- :DBBackend, default sf). All backends come from the static
+      -- catalogue (db-python-cmp) — vim-dadbod-completion can't be reused
+      -- here: it hard-gates itself to sql filetypes.
+      cmp.register_source("db-python-catalogue", require("db-python-cmp").new())
+      cmp.setup.filetype({ "python" }, {
+        sources = cmp.config.sources({
+          { name = "nvim_lsp" },
+          { name = "luasnip" },
+          { name = "db-python-catalogue" },
+        }, {
+          { name = "buffer" },
+          { name = "path" },
+        }),
+      })
     end,
   },
 }
