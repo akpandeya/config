@@ -171,12 +171,15 @@ local function sql_scratch(args)
   end
 end
 
--- Result-buffer (dbout) niceties: long JSON cells otherwise mean endless
--- horizontal scroll in the table layout.
---   <Leader>R  toggle expanded layout (psql \x, built into dadbod-ui)
---   gj         open cell under cursor as pretty-printed JSON in a split
---   gr         transpose row under cursor into a vertical key:value view
---              (raw glue tables have 100+ columns; horizontal is hopeless)
+-- Result-buffer (dbout) rendering + niceties.
+--
+-- Default view is compact: columns are sized to fit the window, long
+-- values truncate with `…`, every column stays visible (nowrap). The
+-- full parsed table lives in b:dbout_rows — gj pretty-prints the cell
+-- under cursor from the stash, gr transposes the row vertically,
+-- <Leader>R toggles compact ↔ full-width. Output we can't parse (errors,
+-- \x records, snowflake TABLE grids) keeps dadbod's raw rendering with
+-- the old yank-based gj/gr.
 local function open_value_split(text, filetype)
   vim.cmd("vsplit")
   vim.cmd("enew")
@@ -260,32 +263,254 @@ local function list_tables()
   vim.bo.buflisted = false
 end
 
-local function setup_dbout()
-  vim.opt_local.wrap = true
-  vim.opt_local.linebreak = true
+local function content_sig(lines)
+  return #lines .. "|" .. (lines[1] or "") .. "|" .. (lines[#lines] or "")
+end
+
+-- psql aligned format: the '+' positions in the separator line are the
+-- exact column boundaries, so slicing every line at those positions is
+-- immune to '|' characters that appear inside values.
+local function parse_aligned(lines)
+  local sep = lines[2]
+  if not (sep and sep:match("^[%-+ ]+$") and sep:find("%-")) then return nil end
+  local bounds = {}
+  local from = 1
+  while true do
+    local b = sep:find("+", from, true)
+    if not b then break end
+    bounds[#bounds + 1] = b
+    from = b + 1
+  end
+  local function slice(line, i)
+    if #bounds == 0 then return vim.trim(line) end
+    local a = i == 1 and 1 or bounds[i - 1] + 1
+    local b = i <= #bounds and bounds[i] - 1 or #line
+    return vim.trim(line:sub(a, b))
+  end
+  local ncols = #bounds == 0 and 1 or (#bounds + 1)
+  local rows = {}
+  local header = {}
+  for i = 1, ncols do header[i] = slice(lines[1], i) end
+  rows[1] = header
+  for n = 3, #lines do
+    local line = lines[n]
+    if line:match("^%s*%(%d+ rows?%)") then break end
+    if vim.trim(line) ~= "" then
+      local row = {}
+      for i = 1, ncols do row[i] = slice(line, i) end
+      rows[#rows + 1] = row
+    end
+  end
+  return rows
+end
+
+-- databricks hf-photon TSV (one physical line per row, tab-separated).
+local function parse_tsv(lines)
+  if not (lines[1] and lines[1]:find("\t")) then return nil end
+  local function split(line)
+    local cells = vim.fn.split(line, "\t", 1)
+    for i = #cells, 1, -1 do cells[i] = cells[i]:gsub("\r$", "") end
+    return cells
+  end
+  local rows = {}
+  rows[1] = split(lines[1])
+  local ncols = #rows[1]
+  for n = 2, #lines do
+    local line = lines[n]
+    if line:match("^%s*%(%d+ rows?%)") then break end
+    if vim.trim(line) ~= "" then
+      local row = split(line)
+      for i = ncols + 1, #row do row[i] = nil end
+      for i = #row + 1, ncols do row[i] = "" end
+      rows[#rows + 1] = row
+    end
+  end
+  return rows
+end
+
+local function parse_dbout(lines)
+  if #lines == 0 then return nil end
+  return parse_aligned(lines) or parse_tsv(lines)
+end
+
+-- Flatten control chars: cells render on one physical line each; real
+-- newlines inside values are only visible via gj/gr.
+local function dbout_display(s)
+  return (s or ""):gsub("[\r\n\t]+", " ")
+end
+
+local function trunc_ellipsis(s, width)
+  if width < 1 then return "" end
+  if vim.fn.strdisplaywidth(s) <= width then return s end
+  local cut = vim.fn.strcharpart(s, 0, width - 1)
+  while vim.fn.strdisplaywidth(cut) > width - 1 do
+    cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
+  end
+  return cut .. "…"
+end
+
+local function pad_cell(s, w)
+  local pad = w - vim.fn.strdisplaywidth(s)
+  return pad > 0 and (s .. string.rep(" ", pad)) or s
+end
+
+local function natural_widths(rows)
+  local widths = {}
+  for c = 1, #rows[1] do
+    local max = 1
+    for r = 1, #rows do
+      max = math.max(max, vim.fn.strdisplaywidth(dbout_display(rows[r][c])))
+    end
+    widths[c] = max
+  end
+  return widths
+end
+
+-- Fit all columns into `usable` display columns: narrow columns keep
+-- their full width, wide ones share the rest proportionally (min 1 char).
+local function compute_widths(rows, usable)
+  local ncols = #rows[1]
+  usable = math.max(usable, ncols)
+  local natural = natural_widths(rows)
+  local total = 0
+  for _, w in ipairs(natural) do total = total + w end
+  if total <= usable then return natural end
+  local base = math.floor(usable / ncols)
+  local widths, used, big, big_total = {}, 0, {}, 0
+  for c = 1, ncols do
+    if natural[c] <= base then
+      widths[c] = natural[c]
+      used = used + natural[c]
+    else
+      big[#big + 1] = c
+      big_total = big_total + natural[c]
+    end
+  end
+  local left = math.max(usable - used, #big)
+  for _, c in ipairs(big) do
+    widths[c] = math.max(math.floor(left * natural[c] / big_total), 1)
+  end
+  return widths
+end
+
+-- Render rows at the given widths; returns the buffer lines and the
+-- display-column position where each cell starts (for cursor → cell).
+local function render_table(rows, widths)
+  local ncols = #rows[1]
+  local starts, start = {}, 2
+  for c = 1, ncols do
+    starts[c] = start
+    start = start + widths[c] + 3
+  end
+  local function fmt_row(row)
+    local parts = {}
+    for c = 1, ncols do
+      parts[c] = pad_cell(trunc_ellipsis(dbout_display(row[c]), widths[c]), widths[c])
+    end
+    return " " .. table.concat(parts, " | ")
+  end
+  local lines = { fmt_row(rows[1]) }
+  local dashes = {}
+  for c = 1, ncols do dashes[c] = string.rep("-", widths[c]) end
+  lines[2] = " " .. table.concat(dashes, "-+-")
+  for r = 2, #rows do lines[#lines + 1] = fmt_row(rows[r]) end
+  return lines, starts
+end
+
+local function dbout_window_width()
+  local win = vim.fn.bufwinnr("%")
+  if win > 0 then return vim.fn.winwidth(win) - 2 end
+  return math.floor(vim.o.columns / 2) - 2
+end
+
+-- Redraw the current dbout buffer at the given layout.
+local function set_layout(compact)
+  local rows = vim.b.dbout_rows
+  if type(rows) ~= "table" or #rows == 0 or #(rows[1] or {}) == 0 then return end
+  vim.b.dbout_compact = compact
+  vim.opt_local.wrap = not compact
+  local widths = compact and compute_widths(rows, dbout_window_width())
+    or natural_widths(rows)
+  local lines, starts = render_table(rows, widths)
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  vim.b.dbout_starts = starts
+  vim.b.dbout_render_sig = content_sig(lines)
+end
+
+-- Cell under cursor from the stash (rendered lines are truncated; buffer
+-- text is not the source of truth). Returns value, row_index, col_index.
+local function cell_at_cursor()
+  local rows = vim.b.dbout_rows
+  local starts = vim.b.dbout_starts
+  if type(rows) ~= "table" or type(starts) ~= "table" then return nil end
+  local r = vim.fn.line(".") - 1 -- buffer line 3 = rows[2]
+  if r < 2 or r > #rows then return nil end
+  local col, c = vim.fn.virtcol("."), 1
+  for i = 1, #starts do
+    if starts[i] <= col then c = i else break end
+  end
+  local row = rows[r]
+  return (row and row[c]) or "", r, c
+end
+
+local function apply_dbout_maps(compact)
+  if not compact then
+    -- Unparsed output: fall back to the yank-based helpers. <Leader>R is
+    -- left to dadbod-ui.
+    vim.keymap.set("n", "gj", function()
+      vim.cmd('execute "normal vic"')
+      vim.cmd("normal! y")
+      local cell = vim.trim(vim.fn.getreg('"'))
+      if cell == "" then return end
+      open_value_split(pretty_json(cell), "json")
+    end, { buffer = true, desc = "Pretty-print cell JSON in split" })
+    vim.keymap.set("n", "gr", function()
+      local header = vim.fn.getline(1)
+      local row = vim.fn.getline(".")
+      if not header:find("\t") or not row:find("\t") then
+        vim.notify("gr: only works on tab-separated output (databricks)", vim.log.levels.WARN)
+        return
+      end
+      local cols = vim.fn.split(header, "\t")
+      local vals = vim.fn.split(row, "\t")
+      local width = 1
+      for _, c in ipairs(cols) do width = math.max(width, #c) end
+      local lines = {}
+      for i, c in ipairs(cols) do
+        table.insert(lines, string.format("%-" .. width .. "s  %s", c, vals[i] or ""))
+      end
+      local buf = open_value_split(table.concat(lines, "\n"), "dbout-transpose")
+      vim.keymap.set("n", "gj", function()
+        local val = vim.fn.getline("."):match("^%S+%s%s+(.*)$") or ""
+        if val == "" then return end
+        open_value_split(pretty_json(val), "json")
+      end, { buffer = buf, desc = "Pretty-print value JSON in split" })
+    end, { buffer = true, desc = "Transpose row into vertical key:value view" })
+    return
+  end
 
   vim.keymap.set("n", "gj", function()
-    vim.cmd('execute "normal vic"')
-    vim.cmd("normal! y")
-    local cell = vim.trim(vim.fn.getreg('"'))
-    if cell == "" then return end
+    local cell = cell_at_cursor()
+    if not cell or vim.trim(cell) == "" then
+      vim.notify("No cell value under cursor", vim.log.levels.WARN)
+      return
+    end
     open_value_split(pretty_json(cell), "json")
   end, { buffer = true, desc = "Pretty-print cell JSON in split" })
 
   vim.keymap.set("n", "gr", function()
-    local header = vim.fn.getline(1)
-    local row = vim.fn.getline(".")
-    if not header:find("\t") or not row:find("\t") then
-      vim.notify("gr: only works on tab-separated output (databricks)", vim.log.levels.WARN)
+    local rows = vim.b.dbout_rows
+    local _, r = cell_at_cursor()
+    if not r then
+      vim.notify("gr: cursor is on the header, not a row", vim.log.levels.WARN)
       return
     end
-    local cols = vim.fn.split(header, "\t")
-    local vals = vim.fn.split(row, "\t")
+    local header, row = rows[1], rows[r]
     local width = 1
-    for _, c in ipairs(cols) do width = math.max(width, #c) end
+    for _, h in ipairs(header) do width = math.max(width, vim.fn.strdisplaywidth(h)) end
     local lines = {}
-    for i, c in ipairs(cols) do
-      table.insert(lines, string.format("%-" .. width .. "s  %s", c, vals[i] or ""))
+    for i, h in ipairs(header) do
+      table.insert(lines, string.format("%-" .. width .. "s  %s", h, row[i] or ""))
     end
     local buf = open_value_split(table.concat(lines, "\n"), "dbout-transpose")
     -- gj on a transposed line: pretty-print that column's value as JSON.
@@ -295,6 +520,39 @@ local function setup_dbout()
       open_value_split(pretty_json(val), "json")
     end, { buffer = buf, desc = "Pretty-print value JSON in split" })
   end, { buffer = true, desc = "Transpose row into vertical key:value view" })
+
+  -- Ours overrides dadbod-ui's <Leader>R (registered later wins): toggle
+  -- compact ↔ full-width, both rendered from the same stash.
+  vim.keymap.set("n", "<Leader>R", function()
+    set_layout(vim.b.dbout_compact == false)
+  end, { buffer = true, desc = "Toggle compact/full-width output" })
+end
+
+local function setup_dbout()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local sig = content_sig(lines)
+  -- Content unchanged since the last pass: just refresh mappings.
+  if vim.b.dbout_raw_sig == sig then
+    apply_dbout_maps(true)
+    return
+  end
+  if vim.b.dbout_render_sig == sig then
+    apply_dbout_maps(vim.b.dbout_compact ~= false)
+    return
+  end
+  local rows = parse_dbout(lines)
+  if not rows or #rows == 0 or #(rows[1] or {}) == 0 then
+    for _, v in ipairs({ "dbout_rows", "dbout_starts", "dbout_raw_sig",
+                         "dbout_render_sig", "dbout_compact" }) do
+      pcall(vim.api.nvim_buf_del_var, 0, v)
+    end
+    apply_dbout_maps(false)
+    return
+  end
+  vim.b.dbout_raw_sig = sig
+  vim.b.dbout_rows = rows
+  set_layout(true)
+  apply_dbout_maps(true)
 end
 
 return {
@@ -409,6 +667,23 @@ return {
         group = vim.api.nvim_create_augroup("dbui-sql-history", { clear = true }),
         pattern = "*DBExecutePost",
         callback = log_query,
+      })
+
+      -- Re-executing into an already-open dbout buffer replaces its content
+      -- without a FileType/BufEnter event — re-render compactly after dadbod
+      -- writes the new result.
+      vim.api.nvim_create_autocmd("User", {
+        group = vim.api.nvim_create_augroup("dbout-rerender", { clear = true }),
+        pattern = "*DBExecutePost",
+        callback = function(ev)
+          local output = ev.match:match("^(.*)/DBExecutePost$")
+          local buf = output and vim.fn.bufnr(output) or -1
+          if buf < 0 then return end
+          vim.schedule(function()
+            if not vim.api.nvim_buf_is_valid(buf) then return end
+            vim.api.nvim_buf_call(buf, setup_dbout)
+          end)
+        end,
       })
 
       vim.keymap.set("n", "<leader>D", "<cmd>DBUIToggle<CR>", { desc = "Toggle DBUI" })
