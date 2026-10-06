@@ -196,6 +196,70 @@ local function pretty_json(text)
   return text
 end
 
+-- Describe a table in the buffer's connection: `describe table` for the
+-- CLI-backed adapters, information_schema for postgres (psql \d meta-
+-- commands don't work through dadbod). Table name from the arg or the
+-- WORD under cursor (<cWORD> so dotted `glue.db.table` names stay whole).
+local function describe_table(name)
+  local url = vim.b.db
+  if not url then
+    vim.notify("No connection bound — open the buffer with :SqlScratch", vim.log.levels.WARN)
+    return
+  end
+  name = vim.trim(name or "")
+  if name == "" then name = vim.fn.expand("<cWORD>") end
+  if name == "" or name:find("[%s;]") then
+    vim.notify("No table name under cursor (or pass one: :SqlDescribe db.schema.tbl)", vim.log.levels.WARN)
+    return
+  end
+  require("lazy").load({ plugins = { "vim-dadbod" } })
+  local query
+  if url:match("^postgres") then
+    local schema, tbl = name:match("^([%w_]+)%.(%w+)$")
+    if schema then
+      query = string.format(
+        "select column_name, data_type, is_nullable from information_schema.columns where table_schema = '%s' and table_name = '%s' order by ordinal_position",
+        schema, tbl)
+    else
+      query = string.format(
+        "select table_schema, column_name, data_type, is_nullable from information_schema.columns where table_name = '%s' order by table_schema, ordinal_position",
+        name)
+    end
+  else
+    query = "describe table " .. name
+  end
+  vim.cmd("DB " .. url .. " " .. query)
+end
+
+-- List every table available on the buffer's connection. Snowflake/
+-- databricks: the curated catalogue file (offline, no live query — same
+-- source as completion). Postgres: a live information_schema query.
+-- <leader>dT in sql buffers.
+local function list_tables()
+  local url = vim.b.db
+  if not url then
+    vim.notify("No connection bound — open the buffer with :SqlScratch", vim.log.levels.WARN)
+    return
+  end
+  require("lazy").load({ plugins = { "vim-dadbod" } })
+  if url:match("^postgres") then
+    vim.cmd("DB " .. url
+      .. " select table_schema, table_name from information_schema.tables"
+      .. " where table_schema not in ('pg_catalog', 'information_schema')"
+      .. " order by 1, 2")
+    return
+  end
+  local kind = url:match("^([%w_]+):")
+  local file = vim.fn.stdpath("data") .. "/db-catalogue/" .. kind .. ".tables"
+  if vim.fn.filereadable(file) == 0 then
+    vim.notify("No catalogue yet — run :SqlCatalogueRefresh", vim.log.levels.WARN)
+    return
+  end
+  vim.cmd("vsplit " .. vim.fn.fnameescape(file))
+  vim.bo.readonly = true
+  vim.bo.buflisted = false
+end
+
 local function setup_dbout()
   vim.opt_local.wrap = true
   vim.opt_local.linebreak = true
@@ -248,8 +312,14 @@ return {
       -- the default List helper wraps {table} in double quotes, which breaks
       -- dotted names on both backends — use unquoted variants.
       vim.g.db_ui_table_helpers = {
-        databricks = { List = "select * from {table} limit 200" },
-        snowflake = { List = "select * from {table} limit 200" },
+        databricks = {
+          List = "select * from {table} limit 200",
+          Columns = "describe table {table}",
+        },
+        snowflake = {
+          List = "select * from {table} limit 200",
+          Columns = "describe table {table}",
+        },
       }
       setup_connections()
 
@@ -286,6 +356,38 @@ return {
         desc = "Open per-service executed-query history",
       })
 
+      -- One-shot connectivity check: run `select 1` against a single service
+      -- and show the result — nothing else gets opened or connected.
+      vim.api.nvim_create_user_command("SqlPing", function(args)
+        local run = function(service)
+          if not service then return end
+          require("lazy").load({ plugins = { "vim-dadbod" } })
+          vim.cmd("DB " .. conn_url(service) .. " select 1 as ping")
+        end
+        if args.args == "" then
+          pick_service(run)
+        else
+          run(args.args)
+        end
+      end, {
+        nargs = "?",
+        complete = function() return connections() end,
+        desc = "Run select 1 against one connection to verify it",
+      })
+
+      vim.api.nvim_create_user_command("SqlDescribe", function(args)
+        describe_table(args.args)
+      end, {
+        nargs = "?",
+        desc = "Describe a table in the buffer's connection (default: table under cursor)",
+      })
+
+      vim.api.nvim_create_user_command("SqlTables", function()
+        list_tables()
+      end, {
+        desc = "List all tables on the buffer's connection",
+      })
+
       -- Rebuild the curated table lists behind the snowflake/databricks
       -- adapters (hf-db-catalogue-refresh from hf-workbench). Runs for a few
       -- minutes in the background; DBUI picks the new lists up on next expand.
@@ -319,6 +421,10 @@ return {
         pattern = "sql",
         callback = function(ev)
           vim.keymap.set("n", "<leader>E", ":.DB<CR>", { buffer = ev.buf, desc = "Execute SQL line" })
+          vim.keymap.set("n", "<leader>dt", function() describe_table("") end,
+            { buffer = ev.buf, desc = "Describe table under cursor" })
+          vim.keymap.set("n", "<leader>dT", list_tables,
+            { buffer = ev.buf, desc = "List all tables on this connection" })
         end,
       })
     end,
