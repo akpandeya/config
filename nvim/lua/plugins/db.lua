@@ -390,28 +390,35 @@ local function natural_widths(rows)
 end
 
 -- Fit all columns into `usable` display columns: narrow columns keep
--- their full width, wide ones share the rest proportionally (min 1 char).
+-- their full width, wide ones split the rest evenly (progressive
+-- water-filling — each column gets at least the fair share of what's
+-- left), so truncated columns show a useful fragment instead of a bare
+-- `…`. One blob column can't take more than BLOB_CAP of the usable
+-- width, which keeps room for everything else.
+local BLOB_CAP = 0.4
+
 local function compute_widths(rows, usable)
   local ncols = #rows[1]
-  usable = math.max(usable, ncols)
+  if ncols == 0 then return {} end
   local natural = natural_widths(rows)
   local total = 0
   for _, w in ipairs(natural) do total = total + w end
   if total <= usable then return natural end
-  local base = math.floor(usable / ncols)
-  local widths, used, big, big_total = {}, 0, {}, 0
-  for c = 1, ncols do
-    if natural[c] <= base then
-      widths[c] = natural[c]
-      used = used + natural[c]
-    else
-      big[#big + 1] = c
-      big_total = big_total + natural[c]
-    end
+  local cap = math.max(math.floor(usable * BLOB_CAP), 1)
+  local order = {}
+  for c = 1, ncols do order[c] = c end
+  table.sort(order, function(a, b) return natural[a] < natural[b] end)
+  local widths, remaining, left = {}, usable, ncols
+  for _, c in ipairs(order) do
+    local share = math.max(math.floor(remaining / left), 1)
+    widths[c] = math.max(math.min(natural[c], cap, share), 1)
+    remaining = remaining - widths[c]
+    left = left - 1
   end
-  local left = math.max(usable - used, #big)
-  for _, c in ipairs(big) do
-    widths[c] = math.max(math.floor(left * natural[c] / big_total), 1)
+  -- rounding slack goes to the widest column, up to its natural width
+  if remaining > 0 then
+    local widest = order[#order]
+    widths[widest] = widths[widest] + math.min(remaining, natural[widest] - widths[widest])
   end
   return widths
 end
