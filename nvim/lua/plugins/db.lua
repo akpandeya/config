@@ -268,8 +268,28 @@ local function content_sig(lines)
 end
 
 -- psql aligned format: the '+' positions in the separator line are the
--- exact column boundaries, so slicing every line at those positions is
--- immune to '|' characters that appear inside values.
+-- exact column boundaries. Rows are sliced at those *display* positions
+-- via a per-line display→byte map, so tabs (psql aligns by display width)
+-- and multi-byte characters inside values can't shift the frame pipes.
+local function display_map(line)
+  local map, col, byte = {}, 0, 1
+  local n = vim.fn.strchars(line)
+  for i = 1, n do
+    local c = vim.fn.strcharpart(line, i - 1, 1)
+    local w
+    if c == "\t" then
+      w = 8 - (col % 8)
+    else
+      w = vim.fn.strdisplaywidth(c)
+    end
+    for k = 1, w do map[col + k] = byte end
+    col = col + w
+    byte = byte + #c
+  end
+  map[col + 1] = #line + 1
+  return map
+end
+
 local function parse_aligned(lines)
   local sep = lines[2]
   if not (sep and sep:match("^[%-+ ]+$") and sep:find("%-")) then return nil end
@@ -281,23 +301,26 @@ local function parse_aligned(lines)
     bounds[#bounds + 1] = b
     from = b + 1
   end
-  local function slice(line, i)
+  local ncols = #bounds == 0 and 1 or (#bounds + 1)
+  local function slice(line, map, i)
     if #bounds == 0 then return vim.trim(line) end
-    local a = i == 1 and 1 or bounds[i - 1] + 1
-    local b = i <= #bounds and bounds[i] - 1 or #line
+    local a = map[i == 1 and 1 or (bounds[i - 1] + 1)] or #line + 1
+    local b = (map[bounds[i]] or (#line + 1)) - 1
+    if b < a then return "" end
     return vim.trim(line:sub(a, b))
   end
-  local ncols = #bounds == 0 and 1 or (#bounds + 1)
   local rows = {}
   local header = {}
-  for i = 1, ncols do header[i] = slice(lines[1], i) end
+  local hmap = display_map(lines[1])
+  for i = 1, ncols do header[i] = slice(lines[1], hmap, i) end
   rows[1] = header
   for n = 3, #lines do
     local line = lines[n]
     if line:match("^%s*%(%d+ rows?%)") then break end
     if vim.trim(line) ~= "" then
       local row = {}
-      for i = 1, ncols do row[i] = slice(line, i) end
+      local map = display_map(line)
+      for i = 1, ncols do row[i] = slice(line, map, i) end
       rows[#rows + 1] = row
     end
   end
@@ -418,7 +441,7 @@ local function render_table(rows, widths)
 end
 
 local function dbout_window_width()
-  local win = vim.fn.bufwinnr("%")
+  local win = vim.fn.bufwinnr(vim.api.nvim_get_current_buf())
   if win > 0 then return vim.fn.winwidth(win) - 2 end
   return math.floor(vim.o.columns / 2) - 2
 end
@@ -455,8 +478,10 @@ end
 
 local function apply_dbout_maps(compact)
   if not compact then
-    -- Unparsed output: fall back to the yank-based helpers. <Leader>R is
-    -- left to dadbod-ui.
+    -- Unparsed output: fall back to the yank-based helpers with dadbod's
+    -- original wrapped layout. <Leader>R is left to dadbod-ui.
+    vim.opt_local.wrap = true
+    vim.opt_local.linebreak = true
     vim.keymap.set("n", "gj", function()
       vim.cmd('execute "normal vic"')
       vim.cmd("normal! y")
@@ -589,8 +614,11 @@ return {
 
       -- Insurance: some dadbod flows leave the output buffer without the
       -- dbout filetype (no wrap, no mappings) — re-apply by filename.
-      -- setup_dbout is idempotent (buffer-local maps just get overwritten).
-      vim.api.nvim_create_autocmd("BufEnter", {
+      -- setup_dbout is idempotent (sig-checked, mappings just overwritten).
+      -- BufReadPost covers dadbod's `:edit!` reload after a query finishes
+      -- while the cursor already sits in the dbout window (BufEnter doesn't
+      -- fire there).
+      vim.api.nvim_create_autocmd({ "BufEnter", "BufReadPost" }, {
         group = vim.api.nvim_create_augroup("dbout-insurance", { clear = true }),
         pattern = "*.dbout",
         callback = setup_dbout,
