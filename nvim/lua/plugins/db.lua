@@ -455,7 +455,11 @@ local function set_layout(compact)
   local widths = compact and compute_widths(rows, dbout_window_width())
     or natural_widths(rows)
   local lines, starts = render_table(rows, widths)
+  -- dadbod-ui marks dbout buffers nomodifiable; lift it around the redraw.
+  local was_modifiable = vim.bo.modifiable
+  vim.bo.modifiable = true
   vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  vim.bo.modifiable = was_modifiable
   vim.b.dbout_starts = starts
   vim.b.dbout_render_sig = content_sig(lines)
 end
