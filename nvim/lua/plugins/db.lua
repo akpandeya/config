@@ -14,6 +14,7 @@
 --   :SqlHistory [service] log of every query executed against a service
 --   :SqlCatalogueRefresh  rebuild the snowflake/databricks table lists
 --   visual <leader>E      execute selection against the buffer's connection
+--                         (sql scratch buffers: <S-CR> runs the line too)
 
 local services_file = vim.env.PGSERVICEFILE or (vim.env.HOME .. "/.pg_service.conf")
 
@@ -97,6 +98,68 @@ local function log_query(ev)
   h:close()
 end
 
+-- Safety guard at execute time. dadbod fires DBExecutePre synchronously
+-- *before* the job starts, and the query text lives in the input file of the
+-- query dict (same dict log_query reads at Post) — so rewriting the file
+-- here changes what actually runs. Two rules:
+--   * top-level select/with without limit/fetch → `limit 500` appended
+--     (blocking was rejected: full scans are sometimes legit, an implicit
+--     cap is self-documenting, and you bump it explicitly when wanted)
+--   * mutating statements → confirm() first; :DB! (bang) forces through
+local GUARD_MUTATING = {
+  insert = true, update = true, delete = true, truncate = true,
+  drop = true, alter = true, create = true, merge = true,
+  grant = true, revoke = true,
+}
+
+local function guard_statement(text)
+  -- strip line comments (heuristic: `--` inside string literals is rare)
+  local body = text:gsub("%-%-[^\n]*", "")
+  return body:match("^%s*([%a_]+)")
+end
+
+local function guard_query(ev)
+  local output = ev.match:match("^(.*)/DBExecutePre$")
+  local buf = output and vim.fn.bufnr(output) or -1
+  if buf < 0 then return end
+  local d = vim.fn.getbufvar(buf, "db")
+  if type(d) ~= "table" or type(d.input) ~= "string"
+    or vim.fn.filereadable(d.input) == 0 then
+    return -- inline-query flows without an input file are not guarded
+  end
+  local f = io.open(d.input, "r")
+  if not f then return end
+  local text = f:read("*a")
+  f:close()
+  local word = guard_statement(text)
+  if not word then return end
+  word = word:lower()
+  local low = text:lower()
+  -- mutating: also catch `with ... insert/update/delete`
+  if GUARD_MUTATING[word]
+    or (word == "with" and (low:find("%f[%w]insert%f[%W]")
+      or low:find("%f[%w]update%f[%W]")
+      or low:find("%f[%w]delete%f[%W]"))) then
+    if d.bang == 1 or d.bang == true then return end
+    if vim.fn.confirm(("Run mutating query (%s)?"):format(word), "&Yes\n&No", 2) ~= 1 then
+      vim.fn.writefile({ "select 'sql guard: mutating query not run' as blocked;" }, d.input, "b")
+    end
+    return
+  end
+  if word ~= "select" and word ~= "with" then return end
+  if not low:find("%f[%w]from%f[%W]") then return end -- select without from can't scan
+  if low:find("%f[%w]limit%f[%W]") or low:find("%f[%w]fetch%f[%W]") then
+    return
+  end
+  if text:find(";%s*$") then
+    text = text:gsub(";%s*$", "\nlimit 500;\n")
+  else
+    text = vim.trim(text) .. "\nlimit 500\n"
+  end
+  vim.fn.writefile(vim.split(text, "\n", { plain = true }), d.input, "b")
+  vim.notify("sql guard: no limit in query — added limit 500", vim.log.levels.INFO)
+end
+
 local function open_history(service)
   local path = history_path(conn_url(service))
   if vim.fn.filereadable(path) == 0 then
@@ -121,22 +184,56 @@ local function setup_connections()
   if next(dbs) ~= nil then vim.g.dbs = dbs end
 end
 
-local function open_scratch(service)
+-- Per-service scratch is a directory (sql-scratch/<service>/<name>.sql) so
+-- one service can hold many scratch files, PyScratch-style. The old flat
+-- <service>.sql files migrate into <service>/scratch.sql on first use.
+local function scratch_dir_for(service)
+  return vim.fn.stdpath("data") .. "/sql-scratch/" .. service:gsub(":", "-")
+end
+
+local function sanitize_name(name)
+  name = vim.trim(name)
+  if name == "" then return "scratch" end
+  return name:gsub("[^%w%-_]", "_")
+end
+
+local function scratch_names(service)
+  local slug = service:gsub(":", "-")
+  local flat = vim.fn.stdpath("data") .. "/sql-scratch/" .. slug .. ".sql"
+  local dir = scratch_dir_for(service)
+  -- one-time migration: flat file → <service>/scratch.sql
+  if vim.fn.filereadable(flat) == 1 and vim.fn.filereadable(dir .. "/scratch.sql") == 0 then
+    vim.fn.mkdir(dir, "p")
+    os.rename(flat, dir .. "/scratch.sql")
+  end
+  local files = vim.fn.globpath(dir, "*.sql", false, true)
+  table.sort(files, function(a, b)
+    return vim.fn.getftime(a) > vim.fn.getftime(b)
+  end)
+  local names = {}
+  for _, f in ipairs(files) do
+    table.insert(names, vim.fn.fnamemodify(f, ":t:r"))
+  end
+  return names
+end
+
+local function open_scratch(service, name)
   -- Ensure dadbod is loaded so b:db has an adapter behind it (SqlScratch is
   -- created in init() at startup, outside lazy.nvim's cmd stubs).
   require("lazy").load({ plugins = { "vim-dadbod" } })
-  local dir = vim.fn.stdpath("data") .. "/sql-scratch"
+  local dir = scratch_dir_for(service)
   vim.fn.mkdir(dir, "p")
-  local path = dir .. "/" .. service:gsub(":", "-") .. ".sql"
+  local path = dir .. "/" .. sanitize_name(name) .. ".sql"
   vim.cmd.edit(vim.fn.fnameescape(path))
   vim.bo.filetype = "sql"
   vim.b.db = conn_url(service)
 end
 
-local function pick_service(cb)
+-- Generic picker: telescope when available, vim.ui.select otherwise.
+local function pick(items, opts, cb)
   local ok, pickers = pcall(require, "telescope.pickers")
   if not ok then
-    vim.ui.select(connections(), { prompt = "Service:" }, cb)
+    vim.ui.select(items, { prompt = opts.prompt }, cb)
     return
   end
   local finders = require("telescope.finders")
@@ -145,8 +242,8 @@ local function pick_service(cb)
   local action_state = require("telescope.actions.state")
 
   pickers.new({}, {
-    prompt_title = "Service",
-    finder = finders.new_table({ results = connections() }),
+    prompt_title = opts.prompt,
+    finder = finders.new_table({ results = items }),
     sorter = conf.generic_sorter({}),
     previewer = false,
     attach_mappings = function(prompt_bufnr, _)
@@ -160,14 +257,48 @@ local function pick_service(cb)
   }):find()
 end
 
+local function pick_service(cb)
+  pick(connections(), { prompt = "Service" }, cb)
+end
+
+-- Picker over one service's scratch files (newest first, "+ new scratch"
+-- last). No stored scratches yet → create the default one right away
+-- instead of showing a picker over nothing.
+local function pick_scratch(service, cb)
+  local names = scratch_names(service)
+  if #names == 0 then
+    cb("scratch")
+    return
+  end
+  pick(vim.list_extend(names, { "+ new scratch" }), { prompt = "SqlScratch:" }, function(sel)
+    if not sel then return end
+    if sel == "+ new scratch" then
+      local name = vim.trim(vim.fn.input("Scratch name: ", "scratch"))
+      cb(name == "" and "scratch" or name)
+    else
+      cb(sel)
+    end
+  end)
+end
+
 local function sql_scratch(args)
-  local service = args.args
+  local service, name = args.args:match("^(%S+)%s+(%S+)")
+  if not service then
+    service = vim.trim(args.args)
+    name = nil
+  end
   if service == "" then
     pick_service(function(sel)
-      if sel then open_scratch(sel) end
+      if sel then
+        pick_scratch(sel, function(n) open_scratch(sel, n) end)
+      end
+    end)
+  elseif not name then
+    pick_scratch(service, function(n)
+      if n then open_scratch(service, n) end
     end)
   else
-    open_scratch(service)
+    open_scratch(service, name)
   end
 end
 
@@ -487,7 +618,102 @@ local function cell_at_cursor()
   return (row and row[c]) or "", r, c
 end
 
+-- Postgres-first JSON helper: a dbout cell holding a json(b) document gets
+-- expanded into one line per leaf — a copy-pasteable path expression plus
+-- the value. Paths are built from the actual document (client-side, no
+-- extra query), so exploring nested fields is copy-paste instead of
+-- trial-and-error `->`/`->>` nesting.
+local function json_leaf_paths(val, hops, out)
+  if type(val) ~= "table" then
+    out[#out + 1] = { hops = { unpack(hops) }, val = val }
+    return
+  end
+  if next(val) == nil then
+    out[#out + 1] = { hops = { unpack(hops) }, val = "{}", raw = true }
+    return
+  end
+  local n = #val
+  if n > 0 then -- array (sequential integer keys)
+    local shown = math.min(n, 10)
+    for i = 1, shown do
+      hops[#hops + 1] = tostring(i - 1)
+      json_leaf_paths(val[i], hops, out)
+      hops[#hops] = nil
+    end
+    if n > shown then
+      out[#out + 1] = { hops = { unpack(hops) },
+                        val = ("— %d more items"):format(n - shown), raw = true }
+    end
+    return
+  end
+  local keys = vim.tbl_keys(val)
+  table.sort(keys)
+  for _, k in ipairs(keys) do
+    hops[#hops + 1] = k
+    json_leaf_paths(val[k], hops, out)
+    hops[#hops] = nil
+  end
+end
+
+-- Path text from the hop list; the last hop is a text extraction (->>)
+-- unless the leaf is a raw container/placeholder (plain ->).
+local function hop_expr(root, hops, text_last)
+  if #hops == 0 then return root end
+  local parts = {}
+  for i, h in ipairs(hops) do
+    local op = (text_last and i == #hops) and "->>" or "->"
+    if tonumber(h) then
+      parts[#parts + 1] = op .. h
+    else
+      parts[#parts + 1] = op .. "'" .. h .. "'"
+    end
+  end
+  return root .. table.concat(parts)
+end
+
+local function json_cell_split()
+  local rows = vim.b.dbout_rows
+  local cell, _, c = cell_at_cursor()
+  if not cell then
+    vim.notify("Cursor is not on a result row", vim.log.levels.WARN)
+    return
+  end
+  local ok, doc = pcall(vim.json.decode, cell)
+  if not ok or type(doc) ~= "table" then
+    vim.notify("Cell under cursor is not JSON", vim.log.levels.WARN)
+    return
+  end
+  local leaves = {}
+  json_leaf_paths(doc, {}, leaves)
+  -- root identifier: the column header (quoted when not a plain name)
+  local root = rows and rows[1] and rows[1][c] or "data"
+  if not root:match("^[%w_]+$") then root = '"' .. root .. '"' end
+  local entries, width = {}, 1
+  for _, leaf in ipairs(leaves) do
+    local path = hop_expr(root, leaf.hops, not leaf.raw)
+    local v
+    if leaf.raw then
+      v = leaf.val
+    elseif leaf.val == vim.NIL then
+      v = "null"
+    elseif type(leaf.val) == "string" then
+      v = leaf.val
+    else
+      v = tostring(leaf.val) -- numbers / booleans
+    end
+    entries[#entries + 1] = { path = path, val = v }
+    width = math.max(width, vim.fn.strdisplaywidth(path))
+  end
+  local lines = {}
+  for _, e in ipairs(entries) do
+    lines[#lines + 1] = string.format("%-" .. width .. "s  %s", e.path, e.val)
+  end
+  open_value_split(table.concat(lines, "\n"), "sql")
+end
+
 local function apply_dbout_maps(compact)
+  vim.keymap.set("n", "gK", json_cell_split,
+    { buffer = true, desc = "Expand JSON cell into leaf paths" })
   if not compact then
     -- Unparsed output: fall back to the yank-based helpers with dadbod's
     -- original wrapped layout. <Leader>R is left to dadbod-ui.
@@ -637,7 +863,15 @@ return {
 
       vim.api.nvim_create_user_command("SqlScratch", sql_scratch, {
         nargs = "?",
-        complete = function() return connections() end,
+        complete = function(_, cmdline)
+          -- first arg → connections; second arg → that service's scratches
+          -- (no trim: the trailing space is what says we're on arg 2)
+          local args = vim.split(cmdline:match("SqlScratch%s+(.*)") or "", "%s+")
+          if #args <= 1 or args[1] == "" then return connections() end
+          local names = scratch_names(args[1])
+          if #names == 0 then names = { "scratch" } end
+          return names
+        end,
         desc = "Open per-service SQL scratch buffer bound to a connection",
       })
 
@@ -708,6 +942,15 @@ return {
         callback = log_query,
       })
 
+      -- Execution-time guard: implicit limit on unbounded selects, confirm
+      -- on mutating statements (see guard_query for why the file rewrite
+      -- works).
+      vim.api.nvim_create_autocmd("User", {
+        group = vim.api.nvim_create_augroup("db-sql-guard", { clear = true }),
+        pattern = "*DBExecutePre",
+        callback = guard_query,
+      })
+
       -- Re-executing into an already-open dbout buffer replaces its content
       -- without a FileType/BufEnter event — re-render compactly after dadbod
       -- writes the new result.
@@ -726,6 +969,12 @@ return {
       })
 
       vim.keymap.set("n", "<leader>D", "<cmd>DBUIToggle<CR>", { desc = "Toggle DBUI" })
+      vim.keymap.set("n", "<leader>dq", "<cmd>SqlScratch<CR>", { desc = "SQL scratch" })
+      vim.keymap.set("n", "<leader>dh", "<cmd>SqlHistory<CR>", { desc = "SQL history" })
+      -- `:ss` expands to :SqlScratch only when it is the whole cmdline.
+      vim.cmd([[
+        cnoreabbrev <expr> ss (getcmdtype() ==# ':' && getcmdline() ==# 'ss') ? 'SqlScratch' : 'ss'
+      ]])
       vim.keymap.set("x", "<leader>E", ":DB<CR>", { desc = "Execute SQL selection" })
 
       -- dadbod-ui maps <Leader>E buffer-locally to "edit bind parameters" in
@@ -735,6 +984,14 @@ return {
         pattern = "sql",
         callback = function(ev)
           vim.keymap.set("n", "<leader>E", ":.DB<CR>", { buffer = ev.buf, desc = "Execute SQL line" })
+          -- One-key runner: Shift+Enter in sql *scratch* buffers (needs a
+          -- terminal that distinguishes it — kitty-protocol/CSI-u; else it
+          -- arrives as plain Enter and does nothing here). Real repo .sql
+          -- files keep their Enter.
+          if vim.api.nvim_buf_get_name(ev.buf):find("/sql%-scratch/") then
+            vim.keymap.set("n", "<S-CR>", ":.DB<CR>", { buffer = ev.buf, desc = "Execute SQL line" })
+            vim.keymap.set("x", "<S-CR>", ":DB<CR>", { buffer = ev.buf, desc = "Execute SQL selection" })
+          end
           vim.keymap.set("n", "<leader>dt", function() describe_table("") end,
             { buffer = ev.buf, desc = "Describe table under cursor" })
           vim.keymap.set("n", "<leader>dT", list_tables,

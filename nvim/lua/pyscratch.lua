@@ -3,6 +3,9 @@
 --   :PyScratch              picker over this project's scratches (most-recent
 --                           first, "+ new scratch" last); creates scratch.py
 --                           when none exist yet
+--   :PyScratchAll [p] [n]   cross-project access: project picker (or [p],
+--                           fuzzy-resolved), then that project's files.
+--                           `:PyScratchAll workb foo` → foo.py in workbench.
 --   :PyScratch [t] [name]   open stdpath("data")/py-scratch/<project-slug>/
 --                           <name>.py; [t] picks the template for NEW files:
 --                             plain  main() + __main__ block (default)
@@ -149,8 +152,8 @@ local function scratch_names()
   return names
 end
 
-local function open_scratch(name, template)
-  local dir = scratch_dir()
+local function open_scratch(name, template, dir)
+  dir = dir or scratch_dir()
   vim.fn.mkdir(dir, "p")
   ensure_venv()
   ensure_pyrightconfig(dir)
@@ -181,34 +184,20 @@ local function parse_args(fargs)
   return template, name
 end
 
-local function pick_scratch()
-  local files = vim.fn.globpath(scratch_dir(), "*.py", false, true)
-  if #files == 0 then
-    open_scratch("scratch", "plain")
-    return
-  end
-  table.sort(files, function(a, b) return vim.fn.getftime(a) > vim.fn.getftime(b) end)
-  local NEW = "+ new scratch"
-  local items = {}
-  for _, f in ipairs(files) do
-    table.insert(items, vim.fn.fnamemodify(f, ":t:r"))
-  end
-  table.insert(items, NEW)
-
-  local function choose(sel)
-    if not sel then return end
-    if sel == NEW then
-      vim.ui.input({ prompt = "scratch name: " }, function(n)
-        if n and n ~= "" then open_scratch(n, "plain") end
-      end)
-    else
-      open_scratch(sel, "plain")
-    end
-  end
-
+-- Shared picker: telescope when available, vim.ui.select otherwise. Entries
+-- are { display = shown text, value = what choose() gets, path = optional
+-- file path enabling the previewer }.
+local function telescope_pick(title, entries, choose, preview)
   local ok, pickers = pcall(require, "telescope.pickers")
   if not ok then
-    vim.ui.select(items, { prompt = "PyScratch:" }, choose)
+    local items = {}
+    for _, e in ipairs(entries) do table.insert(items, e.display) end
+    vim.ui.select(items, { prompt = title .. ":" }, function(disp)
+      if not disp then return end
+      for _, e in ipairs(entries) do
+        if e.display == disp then choose(e.value) return end
+      end
+    end)
     return
   end
   local finders = require("telescope.finders")
@@ -216,10 +205,15 @@ local function pick_scratch()
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
   pickers.new({}, {
-    prompt_title = "PyScratch",
-    finder = finders.new_table({ results = items }),
+    prompt_title = title,
+    finder = finders.new_table({
+      results = entries,
+      entry_maker = function(e)
+        return { value = e.value, display = e.display, ordinal = e.ordinal or e.display, path = e.path }
+      end,
+    }),
     sorter = conf.generic_sorter({}),
-    previewer = false,
+    previewer = preview and conf.file_previewer({}) or false,
     attach_mappings = function(prompt_bufnr, _)
       actions.select_default:replace(function()
         local sel = action_state.get_selected_entry().value
@@ -229,6 +223,134 @@ local function pick_scratch()
       return true
     end,
   }):find()
+end
+
+-- Picker over one project's scratch files (newest first, "+ new scratch"
+-- last). `dir` defaults to the current project.
+local function pick_scratch(dir)
+  dir = dir or scratch_dir()
+  local files = vim.fn.globpath(dir, "*.py", false, true)
+  if #files == 0 then
+    open_scratch("scratch", "plain", dir)
+    return
+  end
+  table.sort(files, function(a, b) return vim.fn.getftime(a) > vim.fn.getftime(b) end)
+  local NEW = "+ new scratch"
+  local entries = {}
+  for _, f in ipairs(files) do
+    local name = vim.fn.fnamemodify(f, ":t:r")
+    table.insert(entries, { display = name, value = name, path = f })
+  end
+  table.insert(entries, { display = NEW, value = NEW })
+
+  local function choose(sel)
+    if not sel then return end
+    if sel == NEW then
+      vim.ui.input({ prompt = "scratch name: " }, function(n)
+        if n and n ~= "" then open_scratch(n, "plain", dir) end
+      end)
+    else
+      open_scratch(sel, "plain", dir)
+    end
+  end
+
+  telescope_pick("PyScratch", entries, choose, true)
+end
+
+-- ---------------------------------------------------------- :PyScratchAll
+
+-- Projects under py-scratch/ that actually hold scratches (skips empty
+-- dirs), newest-first by their most recent file. slug → display strips the
+-- "-hash6" suffix, so `hf-workbench-a1b2c3` shows as `hf-workbench`.
+local function project_dirs()
+  local dirs = {}
+  for _, d in ipairs(vim.fn.readdir(scratch_root)) do
+    local path = scratch_root .. "/" .. d
+    if vim.fn.isdirectory(path) == 1 and #vim.fn.globpath(path, "*.py") > 0 then
+      table.insert(dirs, { slug = d, path = path })
+    end
+  end
+  local function newest(path)
+    local t = 0
+    for _, f in ipairs(vim.fn.globpath(path, "*.py", false, true)) do
+      t = math.max(t, vim.fn.getftime(f))
+    end
+    return t
+  end
+  table.sort(dirs, function(a, b) return newest(a.path) > newest(b.path) end)
+  return dirs
+end
+
+local function project_display(slug)
+  return (slug:gsub("%-%x%x%x%x%x%x$", ""))
+end
+
+-- Projects matching a query: exact display-name/slug matches win (all of
+-- them — duplicate display names still get the picker), otherwise
+-- case-insensitive substring matches; no match → all.
+local function match_projects(query)
+  query = query:lower()
+  local dirs, exact, matches = project_dirs(), {}, {}
+  for _, d in ipairs(dirs) do
+    local display = project_display(d.slug):lower()
+    if display == query or d.slug:lower() == query then
+      table.insert(exact, d)
+    elseif display:find(query, 1, true) or d.slug:lower():find(query, 1, true) then
+      table.insert(matches, d)
+    end
+  end
+  if #exact > 0 then return exact end
+  return #matches > 0 and matches or dirs
+end
+
+-- Stage 1: pick the project, stage 2: pick (or create) the scratch in it.
+local function pick_project()
+  local dirs = project_dirs()
+  if #dirs == 0 then
+    pick_scratch() -- nothing anywhere yet → current project's scratch
+    return
+  end
+  local entries = {}
+  for _, d in ipairs(dirs) do
+    table.insert(entries, { display = project_display(d.slug), value = d.slug })
+  end
+  telescope_pick("PyScratch project", entries, function(slug)
+    pick_scratch(scratch_root .. "/" .. slug)
+  end, false)
+end
+
+-- :PyScratchAll [project] [name] — project resolves like the fzf pre-query:
+-- exact display-name/slug match jumps straight in, ambiguous/no match →
+-- picker. With [name], opens that file directly (created with the plain
+-- template when new); without, the project's file picker.
+local function pyscratch_all(args)
+  local fargs = args.fargs
+  if #fargs == 0 then
+    pick_project()
+    return
+  end
+  local matches = match_projects(fargs[1])
+  local function open_in(d, name)
+    local dir = scratch_root .. "/" .. d.slug
+    if name then
+      open_scratch(name, "plain", dir)
+    else
+      pick_scratch(dir)
+    end
+  end
+  if #matches == 1 then
+    open_in(matches[1], fargs[2])
+    return
+  end
+  local entries = {}
+  for _, d in ipairs(matches) do
+    table.insert(entries, { display = project_display(d.slug), value = d.slug })
+  end
+  telescope_pick("PyScratch project", entries, function(slug)
+    for _, d in ipairs(matches) do
+      if d.slug == slug then open_in(d, fargs[2]) return end
+    end
+  end, false)
 end
 
 -- ---------------------------------------------------------------- b:db sync
@@ -314,6 +436,31 @@ end, {
   end,
   desc = "Open per-project python scratch ([template] [name]; no arg = picker)",
 })
+
+vim.api.nvim_create_user_command("PyScratchAll", pyscratch_all, {
+  nargs = "*",
+  complete = function(_, cmdline)
+    -- arg 1 → project display names; arg 2 → that project's scratch files
+    local fargs = vim.split(cmdline:match("PyScratchAll%s+(.*)") or "", "%s+")
+    if #fargs <= 1 then
+      local names = {}
+      for _, d in ipairs(project_dirs()) do
+        table.insert(names, project_display(d.slug))
+      end
+      return names
+    end
+    local names = {}
+    for _, d in ipairs(match_projects(fargs[1])) do
+      for _, f in ipairs(vim.fn.globpath(scratch_root .. "/" .. d.slug, "*.py", false, true)) do
+        table.insert(names, vim.fn.fnamemodify(f, ":t:r"))
+      end
+    end
+    return names
+  end,
+  desc = "Open a python scratch from any project ([project] [name]; no arg = project picker)",
+})
+
+vim.keymap.set("n", "<leader>dp", "<cmd>PyScratchAll<CR>", { desc = "PyScratch: all projects" })
 
 vim.api.nvim_create_user_command("DBBackend", function(args)
   if args.args ~= "" then

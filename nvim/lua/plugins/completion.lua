@@ -48,6 +48,22 @@ return {
         }),
       })
 
+      -- SQL scratch snippets: typing aid that prefills `where 1=1 limit 500`.
+      -- The DBExecutePre guard in db.lua is the real safety net — snippets
+      -- can be edited, the execute-time guard cannot be skipped.
+      luasnip.add_snippets("sql", {
+        luasnip.snippet("sel", {
+          luasnip.text_node({ "select *", "from " }),
+          luasnip.insert_node(1, "table"),
+          luasnip.text_node({ "", "where 1=1", "limit 500;", "" }),
+        }),
+        luasnip.snippet("cnt", {
+          luasnip.text_node("select count(*) from "),
+          luasnip.insert_node(1, "table"),
+          luasnip.text_node(" where 1=1;"),
+        }),
+      })
+
       -- SQL: complete tables/columns from the buffer's dadbod connection.
       -- db-catalogue is our own source for the CLI adapters (databricks /
       -- snowflake): their fully-qualified catalogue names never match

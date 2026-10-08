@@ -9,6 +9,11 @@
 #   cc [target]     Claude Code (claude --dangerously-skip-permissions)
 #   oc [target]     opencode (opencode --auto)
 #   nv [target]     nvim
+#   pys [tpl] [name] python scratch straight into nvim (:PyScratch) — run
+#                   from inside the repo: `pys`, `pys sql`, `pys sql foo`.
+#   pys -a           cross-project picker over every project's scratches.
+#   pys <repo> [name]  jump straight to another project's scratch
+#                   (fuzzy-resolved by nvim): `pys workb snap`.
 #                   No target: open the harness in the current directory.
 #                   Target: shortcut name, repo basename/path, group folder
 #                   (e.g. `cc work`), or fuzzy query.
@@ -274,6 +279,26 @@ _dev_go() {
 cc() { _dev_go claude "$@"; }
 oc() { _dev_go opencode "$@"; }
 nv() { _dev_go nvim "$@"; }
+
+# pys [template] [name]: open this project's python scratch directly in nvim
+# (:PyScratch) — `pys`, `pys sql`, `pys sql foo`. Template names win; other
+# args go to :PyScratchAll for cross-project access. Run from inside the
+# repo for the project-scoped forms.
+pys() {
+    if [ "$1" = "-a" ]; then
+        shift
+        echo "pys: -> nvim +PyScratchAll $*"
+        nvim "+PyScratchAll $*"
+        return
+    fi
+    if [ -n "$1" ] && [ "$1" != plain ] && [ "$1" != sql ] && [ "$1" != blank ]; then
+        # not a template → cross-project: `pys workb snap`
+        echo "pys: -> nvim +PyScratchAll $*"
+        nvim "+PyScratchAll $*"
+        return
+    fi
+    nvim "+PyScratch $*"
+}
 
 # --- fuzzy cd -----------------------------------------------------------
 

@@ -158,12 +158,17 @@ Your gutter (left margin) will show:
 | Command / Key | Action | Description |
 |---|---|---|
 | `<leader>D` (`Space + D`) | **DB Browser** | Toggle the DBUI drawer (connections from `pg_service.conf` + snowflake/databricks) |
-| `:SqlScratch [svc]` | **SQL Scratch** | Per-service `.sql` buffer pre-bound to a connection |
-| `:SqlHistory [svc]` | **Query History** | Every query you executed against a service |
+| `<leader>dq` / `:ss` | **SQL Scratch** | Picker over this connection's scratch files (+ "new scratch") |
+| `:SqlScratch [svc] [name]` | **SQL Scratch** | Per-service scratch file pre-bound to a connection — many files per service (`sql-scratch/<svc>/<name>.sql`); no name → picker, second arg completes existing names |
+| `:SqlHistory [svc]` | **Query History** | Every query you executed against a service (`<leader>dh`) |
 | `:SqlCatalogueRefresh` | **Refresh Catalogues** | Rebuild the sf/dbx/pg table+column lists behind completion |
-| `<leader>E` (`Space + E`) | **Execute** | sql buffer: run line / selection · py-scratch: run with the shared venv in a split; focus stays in the scratch, `q` closes the output |
-| `:PyScratch` | **Python Scratch** | No arg: picker over this project's scratches (+ "new"). `:PyScratch [plain\|sql\|blank] [name]` — e.g. `:PyScratch sql` opens `sql.py` with `read_sql`/`duck` pre-imported; autosaves, survives exit |
+| `<leader>E` (`Space + E`) | **Execute** | sql buffer: run line / selection (sql *scratch* only: `Shift+Enter` runs the line, visual `Shift+Enter` the selection) · py-scratch: run with the shared venv in a split; focus stays in the scratch, `q` closes the output |
+| `:PyScratch` / `pys` | **Python Scratch** | Shell: `pys [tpl] [name]` from inside the repo — drops straight into nvim. In nvim, no arg: picker over this project's scratches (+ "new"). `:PyScratch [plain\|sql\|blank] [name]` — e.g. `:PyScratch sql` opens `sql.py` with `read_sql`/`duck` pre-imported; autosaves, survives exit |
+| `:PyScratchAll` / `<leader>dp` | **PyScratch Cross-Project** | Project picker → that project's files. `:PyScratchAll prod [name]` fuzzy-resolves the project (`pys prod [name]` / `pys -a` from the shell) |
 | `:DBBackend [name]` | **Set Backend** | `sf` · `dbx` · `pg:<service>` — drives SQL completion in this python buffer (persistent alternative: a `# backend: <name>` comment at the top of the file) |
 | *(typing in `read_sql("…")`)* | **SQL Autocomplete** | Table names (all backends) + column names (pg) complete inside the string |
+| `sel` / `cnt` (in sql buffers) | **SQL Snippets** | `sel` → `select * from ⟨table⟩ where 1=1 limit 500;` · `cnt` → `select count(*) … where 1=1;` (Tab jumps between placeholders) |
+| `gK` (in result grid) | **JSON Leaf Paths** | Cell holding a json(b) doc → split listing every leaf as a copy-pasteable `col->'a'->>'b'` expression + value |
+| *(execute any query)* | **Sql Guard** | `select`/`with` without limit → `limit 500` added automatically; mutating statements (`insert`/`update`/`delete`/…) ask for confirmation (`:DB!` forces) |
 
 
