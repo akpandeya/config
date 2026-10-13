@@ -20,6 +20,7 @@ kitty
 zsh
 starship
 neovim
+kotlin-lsp
 tree-sitter-cli
 ripgrep
 fd
@@ -38,4 +39,3 @@ awscli
 # AI coding agents (tap resolves automatically on first install)
 anomalyco/tap/opencode
 rtk
-

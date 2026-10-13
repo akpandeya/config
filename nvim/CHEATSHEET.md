@@ -50,7 +50,7 @@ All split movements start with `Ctrl + w`, or use direct `Ctrl + h/j/k/l`.
 ---
 
 ## 🧠 3. LSP & Code Intelligence (Go to Definition / Usage)
-These keymaps run automatically when editing supported languages (e.g., Kotlin, Python, Lua).
+These keymaps activate when a language server attaches to the buffer (e.g., Kotlin or Python).
 
 | Keybinding | Action | Description |
 |---|---|---|
@@ -64,6 +64,13 @@ These keymaps run automatically when editing supported languages (e.g., Kotlin, 
 | `]d` / `[d` | **Diagnostics** | Jump to Next / Previous error or warning |
 | `Ctrl + o` | **Jump Back** | Go back to your previous cursor location |
 | `Ctrl + i` | **Jump Forward** | Go forward to your next cursor location |
+
+If `gd` only searches within the current file, check `:LspInfo`: without an attached
+server, Vim's built-in `gd` is still active. For Kotlin, `:LspLog` may report
+`This build of kotlin-server has expired`. Update it with
+`brew upgrade --cask kotlin-lsp`, then reopen Neovim and let the project finish
+loading. Kotlin LSP is installed through Homebrew, not Mason; its prerelease
+builds can expire.
 
 ---
 
@@ -140,6 +147,22 @@ Your gutter (left margin) will show:
 | `<leader>hp` (`Space + h + p`) | **Preview Change** | Open a popup showing the diff of the current block |
 | `<leader>hd` (`Space + h + d`) | **Diff File** | Open a side-by-side vertical diff of the current file |
 
+### Changed Files & PR Review (Diffview)
+| Command | Action |
+|---|---|
+| `:Telescope git_status` | Pick a changed file with a diff preview |
+| `:Neotree git_status` | Show changed files in a tree |
+| `:DiffviewOpen` | Browse local changes in a file panel with side-by-side diffs |
+| `:DiffviewOpen --cached` | Review staged changes |
+| `:DiffviewOpen origin/master...HEAD` | Review branch changes since the merge-base with master (PR-style diff) |
+| `:DiffviewFileHistory %` | Browse the current file's commit history |
+| `:DiffviewClose` | Close the diff view |
+
+Run `git fetch origin` in the terminal before reviewing a branch. Replace
+`origin/master` with the PR's actual base branch (for example, `origin/main`).
+In Diffview, select a file in the left panel with `Enter`; use `Ctrl + w` then
+`h` / `l` to move between windows.
+
 ---
 
 ## 🧰 8. Surround & Keymap Discovery (Surround & Which-Key)
@@ -170,5 +193,3 @@ Your gutter (left margin) will show:
 | `sel` / `cnt` (in sql buffers) | **SQL Snippets** | `sel` → `select * from ⟨table⟩ where 1=1 limit 500;` · `cnt` → `select count(*) … where 1=1;` (Tab jumps between placeholders) |
 | `gK` (in result grid) | **JSON Leaf Paths** | Cell holding a json(b) doc → split listing every leaf as a copy-pasteable `col->'a'->>'b'` expression + value |
 | *(execute any query)* | **Sql Guard** | `select`/`with` without limit → `limit 500` added automatically; mutating statements (`insert`/`update`/`delete`/…) ask for confirmation (`:DB!` forces) |
-
-
