@@ -14,6 +14,10 @@
 #   pys -a           cross-project picker over every project's scratches.
 #   pys <repo> [name]  jump straight to another project's scratch
 #                   (fuzzy-resolved by nvim): `pys workb snap`.
+#   jss [name]       JSON scratch straight into nvim (:JsonScratch) — run
+#                   from inside the repo: `jss`, `jss payload`.
+#   jss -a [repo] [name]  cross-project picker over every project's JSON scratches.
+#   jss <repo> <name>  jump straight to another project's JSON scratch.
 #                   No target: open the harness in the current directory.
 #                   Target: shortcut name, repo basename/path, group folder
 #                   (e.g. `cc work`), or fuzzy query.
@@ -300,6 +304,28 @@ pys() {
     nvim "+PyScratch $*"
 }
 
+# jss [name] / jss -a [repo] [name]:
+#   jss              current project's JSON scratch picker (+ new scratch)
+#   jss <name>       open/create <name>.json in current project (or if not in
+#                    a git repo and <name> matches a project with JSON
+#                    scratches, opens that project's picker)
+#   jss <repo> <name> open/create <name>.json in <repo>
+#   jss -a [repo] [name] cross-project picker
+jss() {
+    if [ "$1" = "-a" ]; then
+        shift
+        echo "jss: -> nvim +JsonScratchAll $*"
+        nvim "+JsonScratchAll $*"
+        return
+    fi
+    if [ $# -ge 2 ]; then
+        echo "jss: -> nvim +JsonScratchAll $*"
+        nvim "+JsonScratchAll $*"
+        return
+    fi
+    nvim "+JsonScratch $*"
+}
+
 # --- fuzzy cd -----------------------------------------------------------
 
 # Group folders themselves (e.g. work, personal) plus their direct
@@ -359,7 +385,7 @@ _dev_define_shortcuts() {
     while IFS=$'\t' read -r name rpath harness; do
         if [ -z "$name" ]; then continue; fi
         case "$name" in
-            dev|cc|oc|nv|fcd)
+            dev|cc|oc|nv|fcd|pys|jss)
                 echo "dev: shortcut '$name' ignored (reserved name)" >&2
                 continue
                 ;;

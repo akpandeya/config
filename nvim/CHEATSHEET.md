@@ -177,7 +177,7 @@ In Diffview, select a file in the left panel with `Enter`; use `Ctrl + w` then
 
 ---
 
-## 🗄️ 9. Database & Python Scratch
+## 🗄️ 9. Database, Python & JSON Scratch
 | Command / Key | Action | Description |
 |---|---|---|
 | `<leader>D` (`Space + D`) | **DB Browser** | Toggle the DBUI drawer (connections from `pg_service.conf` + snowflake/databricks) |
@@ -185,9 +185,11 @@ In Diffview, select a file in the left panel with `Enter`; use `Ctrl + w` then
 | `:SqlScratch [svc] [name]` | **SQL Scratch** | Per-service scratch file pre-bound to a connection — many files per service (`sql-scratch/<svc>/<name>.sql`); no name → picker, second arg completes existing names |
 | `:SqlHistory [svc]` | **Query History** | Every query you executed against a service (`<leader>dh`) |
 | `:SqlCatalogueRefresh` | **Refresh Catalogues** | Rebuild the sf/dbx/pg table+column lists behind completion |
-| `<leader>E` (`Space + E`) | **Execute** | sql buffer: run line / selection (sql *scratch* only: `Shift+Enter` runs the line, visual `Shift+Enter` the selection) · py-scratch: run with the shared venv in a split; focus stays in the scratch, `q` closes the output |
+| `<leader>E` (`Space + E`) | **Execute / Format** | sql buffer: run line / selection (sql *scratch* only: `Shift+Enter` runs the line, visual `Shift+Enter` the selection) · py-scratch: run with the shared venv in a split; focus stays in the scratch, `q` closes the output · json buffer: pretty-print via `jq` (`<leader>f` also works) |
 | `:PyScratch` / `pys` | **Python Scratch** | Shell: `pys [tpl] [name]` from inside the repo — drops straight into nvim. In nvim, no arg: picker over this project's scratches (+ "new"). `:PyScratch [plain\|sql\|blank] [name]` — e.g. `:PyScratch sql` opens `sql.py` with `read_sql`/`duck` pre-imported; autosaves, survives exit |
 | `:PyScratchAll` / `<leader>dp` | **PyScratch Cross-Project** | Project picker → that project's files. `:PyScratchAll prod [name]` fuzzy-resolves the project (`pys prod [name]` / `pys -a` from the shell) |
+| `:JsonScratch [name]` / `<leader>dj` / `:js` / `jss` | **JSON Scratch** | Per-project JSON scratch (`json-scratch/<project-slug>/<name>.json`). Shell: `jss [name]`. No arg → picker (+ "new"); `<leader>f` or `<leader>E` pretty-prints the buffer (or selection) in-place; autosaves, survives exit |
+| `:JsonScratchAll` / `<leader>dJ` | **JsonScratch Cross-Project** | Project picker → that project's JSON scratches (`jss -a [repo] [name]` or `jss <repo> <name>` from the shell) |
 | `:DBBackend [name]` | **Set Backend** | `sf` · `dbx` · `pg:<service>` — drives SQL completion in this python buffer (persistent alternative: a `# backend: <name>` comment at the top of the file) |
 | *(typing in `read_sql("…")`)* | **SQL Autocomplete** | Table names (all backends) + column names (pg) complete inside the string |
 | `sel` / `cnt` (in sql buffers) | **SQL Snippets** | `sel` → `select * from ⟨table⟩ where 1=1 limit 500;` · `cnt` → `select count(*) … where 1=1;` (Tab jumps between placeholders) |
