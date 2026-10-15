@@ -1,12 +1,13 @@
 # pg: fuzzy service picker + nvim SQL scratch / psql launcher (zsh only).
 #
 #   fpsql [svc] [name]  fzf over the [stanza] names in $PGSERVICEFILE
-#                       (default ~/.pg_service.conf), then opens the
-#                       per-service SQL scratch in nvim bound to the service
-#                       via vim-dadbod (:SqlScratch). Optional second word
-#                       picks the scratch file: `fpsql nomos review` →
-#                       nomos/review.sql. Exact stanza name skips the picker.
-#   fpsql -p [svc]      psql instead: `psql service=<name>`. Args from the
+#                       (default ~/.pg_service.conf) plus the two CLI-backed
+#                       nvim connections (snowflake:hf, databricks:photon),
+#                       then opens the per-service SQL scratch in nvim bound
+#                       to it via vim-dadbod (:SqlScratch). Optional second
+#                       word picks the scratch file: `fpsql nomos review` →
+#                       nomos/review.sql. Exact name skips the picker.
+#   fpsql -p [svc]      psql instead (pg services only): `psql service=<name>`. Args from the
 #                       first '-...' one onward are passed through to psql:
 #                       `fpsql -p envelope-man -c '\dt'`.
 #   psql service=<TAB>  completes stanza names from the same file.
@@ -32,11 +33,23 @@ _pg_services() {
     ' "$conf"
 }
 
-# fpsql [-p] [svc] [name]: fuzzy-pick a service, then open the per-service
-# nvim scratchpad against it (default), or psql with -p. Words before the
-# first '-...' form the fzf pre-query (exact stanza name jumps straight in),
-# the rest go to psql (`fpsql -p nomos -c '\dt'`); with scratch mode, a second
-# word picks the scratch file (`fpsql nomos review`).
+# fpsql [-p] [svc] [name]: fuzzy-pick a connection, then open the per-service
+# nvim scratchpad against it (default), or psql with -p. The scratch picker
+# also offers snowflake:hf / databricks:photon (nvim binds them through the
+# CLI-shelling dadbod adapters); -p stays pg-only. Words before the first
+# '-...' form the fzf pre-query (exact name jumps straight in), the rest go
+# to psql (`fpsql -p nomos -c '\dt'`); with scratch mode, a second word picks
+# the scratch file (`fpsql nomos review`).
+
+# Picker entries: pg services (name<TAB>host<TAB>db), plus in scratch mode
+# the two extra connections SqlScratch accepts.
+_fpsql_entries() {
+    _pg_services
+    [ "$1" -eq 1 ] && return 0
+    printf 'snowflake:hf\t\tsnow sql (snowflake)\n'
+    printf 'databricks:photon\t\thf-photon (databricks)\n'
+}
+
 fpsql() {
     command -v fzf >/dev/null 2>&1 || {
         echo "fpsql: fzf not found — install it with: brew install fzf" >&2
@@ -65,15 +78,19 @@ fpsql() {
         q="${query_parts[1]}"
     fi
     local sel
-    if [ -n "$q" ] && _pg_services | cut -f1 | grep -qx "$q"; then
+    if [ -n "$q" ] && _fpsql_entries "$psql_mode" | cut -f1 | grep -qx "$q"; then
         sel="$q"
     else
-        sel="$(_pg_services | fzf --query="$q" --delimiter=$'\t' \
+        sel="$(_fpsql_entries "$psql_mode" | fzf --query="$q" --delimiter=$'\t' \
             --with-nth=1 --prompt='fpsql> ' --height=40% --reverse \
-            --header='psql service=<name>')" || return 1
+            --header='pg · snowflake:hf · databricks:photon (-p: psql only)')" || return 1
     fi
     [ -z "$sel" ] && return 1
     sel="${sel%%$'\t'*}"
+    if [ "$psql_mode" -eq 1 ] && ! _pg_services | cut -f1 | grep -qx "$sel"; then
+        echo "fpsql: -p needs a pg service — '$sel' is nvim-scratch only" >&2
+        return 1
+    fi
     if [ "$psql_mode" -eq 0 ]; then
         # extra words after the service name pick the scratch file
         local -a scratch_args=("$sel")
@@ -88,10 +105,11 @@ fpsql() {
 
 # --- completion ---------------------------------------------------------------
 
-# Complete stanza names for fpsql and for `psql service=<prefix>`.
-_pg_service_name_comp() {
+# Complete connection names for fpsql (pg stanzas + the two extra
+# connections); `psql service=<TAB>` uses its own pg-only wrapper below.
+_fpsql_comp() {
     local -a names
-    names=("${(@f)$(_pg_services | cut -f1)}")
+    names=("${(@f)$(_fpsql_entries 0 | cut -f1)}")
     _describe -t pg-service 'pg service' names
 }
 
@@ -109,6 +127,6 @@ _pg_psql() {
 }
 
 if (( $+functions[compdef] )); then
-    compdef _pg_service_name_comp fpsql
+    compdef _fpsql_comp fpsql
     compdef _pg_psql psql
 fi
