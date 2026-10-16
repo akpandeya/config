@@ -114,10 +114,12 @@ In nvim, `<leader>mb` in a markdown buffer starts mdserve on the current file's 
 
 [`rtk`](https://www.rtk-ai.app/) filters/summarizes noisy command output (git, gh, docker, test runners, ...) before it reaches the LLM. It's wired into both harnesses:
 
-- **Claude Code**: a `PreToolUse` hook on `Bash` (`rtk hook claude`) merged into `~/.claude/settings.json`, plus `~/.claude/RTK.md` referenced from `~/.claude/CLAUDE.md` (`@RTK.md`) — both installed via `rtk init -g --auto-patch`.
-- **opencode**: a generated plugin at `~/.config/opencode/plugins/rtk.ts` — installed via `rtk init -g --opencode --auto-patch`.
+- **Claude Code**: a `PreToolUse` hook on `Bash` (`rtk hook claude`) merged into `~/.claude/settings.json`, plus the repo-owned instructions file `claude/RTK.md` (linked to `~/.claude/RTK.md`) referenced by absolute path from the shared AGENTS.md.
+- **opencode**: a generated plugin at `~/.config/opencode/plugins/rtk.ts`.
 
-Both calls are idempotent and non-interactive, so `setup-dev-env.sh` just re-runs them every time (after installing `rtk` from `brew-packages.txt`). Nothing to do on a new machine. To check savings: `rtk gain`.
+Bootstrap runs `rtk init -g --hook-only --auto-patch` (hook only — never touches CLAUDE.md or RTK.md) and `rtk init -g --opencode --auto-patch` (plugin only). Both are idempotent and non-interactive, so `setup-dev-env.sh` re-runs them every time (after installing `rtk` from `brew-packages.txt`).
+
+Do NOT run plain `rtk init -g --auto-patch` against your real HOME: it looks for a literal relative `@RTK.md` line and would append one through the `~/.claude/CLAUDE.md` symlink chain into the tracked repo file. For the same reason `rtk init -g --show` reports CLAUDE.md as "rtk not configured" — expected; the include is managed by this repo. If a new rtk version changes the RTK.md format, regenerate it in a scratch HOME (`HOME=$(mktemp -d) rtk init -g --auto-patch`) and copy the result into `claude/RTK.md`. To check savings: `rtk gain`.
 
 ## Common operations
 

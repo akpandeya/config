@@ -342,8 +342,11 @@ fi
 
 # Global Instructions / Memory files
 link_config "$REPO_DIR/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+link_config "$REPO_DIR/claude/RTK.md"    "$HOME/.claude/RTK.md"
 link_config "$REPO_DIR/gemini/GEMINI.md" "$HOME/.gemini/GEMINI.md"
 link_config "$REPO_DIR/opencode/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"
+link_config "$REPO_DIR/opencode/agent"      "$HOME/.config/opencode/agent"
+link_config "$REPO_DIR/opencode/command"    "$HOME/.config/opencode/command"
 
 # Antigravity CLI Settings and Statusline
 link_config "$REPO_DIR/gemini/settings.json" "$HOME/.gemini/antigravity-cli/settings.json"
@@ -393,18 +396,22 @@ done
 # --- End Shared Antigravity Setup ---
 
 # rtk: CLI proxy that filters/summarizes command output before it reaches
-# the LLM. `rtk init -g` wires it into both Claude Code (RTK.md +
-# ~/.claude/CLAUDE.md reference + a PreToolUse hook merged into
-# settings.json) and, with --opencode, OpenCode (a plugin file). Idempotent
-# and non-interactive (--auto-patch), so safe to re-run on every setup.
+# the LLM. The Claude Code half runs with --hook-only: it merges the
+# PreToolUse hook into settings.json and nothing else. RTK.md is repo-owned
+# (claude/RTK.md, linked above) and referenced by absolute path from the
+# shared AGENTS.md — a plain `rtk init -g --auto-patch` would append a
+# relative @RTK.md line through the CLAUDE.md symlink chain into the tracked
+# repo file, so never run it against a real HOME. The OpenCode half only
+# installs the plugin file. Both calls are idempotent and non-interactive
+# (--auto-patch), so safe to re-run on every setup.
 if command -v rtk >/dev/null 2>&1; then
     if [ "$DRY_RUN" = "1" ]; then
-        echo "Would run: rtk init -g --auto-patch && rtk init -g --opencode --auto-patch"
+        echo "Would run: rtk init -g --hook-only --auto-patch && rtk init -g --opencode --auto-patch"
     else
         echo "=== Setting up rtk (LLM token-saving CLI proxy) ==="
         # Two separate calls: combining --opencode with the base call skips the
         # Claude Code half, so each harness needs its own invocation.
-        rtk init -g --auto-patch
+        rtk init -g --hook-only --auto-patch
         rtk init -g --opencode --auto-patch
     fi
 else
