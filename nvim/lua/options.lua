@@ -31,6 +31,10 @@ vim.keymap.set("n", "<C-j>", "<C-w>j", { desc = "Move to lower window" })
 vim.keymap.set("n", "<C-k>", "<C-w>k", { desc = "Move to upper window" })
 vim.keymap.set("n", "<C-l>", "<C-w>l", { desc = "Move to right window" })
 
+-- Split windows
+vim.keymap.set("n", "<leader>v", ":vsplit<CR>", { silent = true, desc = "Vertical split" })
+vim.keymap.set("n", "<leader>s", ":split<CR>", { silent = true, desc = "Horizontal split" })
+
 -- Keymaps to open the cheatsheet
 vim.keymap.set("n", "<leader>ch", function()
   vim.cmd("edit " .. vim.fn.stdpath("config") .. "/CHEATSHEET.md")
