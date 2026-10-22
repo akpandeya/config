@@ -34,11 +34,18 @@ Read the manifest and resolve, each with its default:
 | value | source | default |
 |---|---|---|
 | `REPO_PATH` | `manifest.repoPath` | — (required) |
-| `EPIC` | `manifest.epic` | `null` |
-| `VERIFY` | `manifest.verifyCommands` | `["npm run build", "npm test"]` |
+| `EPIC` | `manifest.epic` | `manifest.issue` when the manifest has no per-task issues, else `null` |
+| `VERIFY` | `manifest.verifyCommands` → repo `CLAUDE.md` "Full verification" / "Build & Test" command → `["npm run build", "npm test"]` only if `package.json` exists | — (see below) |
 | `COOLDOWN` | `manifest.cooldownSeconds` | `540` |
 | `REVIEWER` | `--reviewer` → `manifest.reviewer` → ask | — |
+| `FINAL_REVIEWER` | `--final-reviewer` → `manifest.finalReviewer` | `null` (no epic-level review) |
 | `GATES` | `manifest.gateAfter` | `[]` |
+
+**Inferred values need confirmation.** If `VERIFY`, `EPIC` or `REVIEWER` came from
+detection rather than the manifest or a flag, do **not** start the loop. Print the
+resolved config and ask the user to confirm (or to write the value into the manifest).
+A wrong verify command turns every task red, and a wrong `Closes` line closes an epic
+on its first merge, so these are never guessed silently.
 
 Per task, each falling back to the manifest-level value:
 `task.verifyCommands`, `task.scope` (default `[]` = no fencing),
@@ -53,6 +60,14 @@ each task closes its *own* issue.
 
 Commit and PR bodies get `Closes #<TASK_ISSUE(t)>`, plus `Part of #<EPIC>` when
 `EPIC` is set and differs from `TASK_ISSUE(t)`.
+
+**Epic without per-task issues.** If no task has `githubIssue` or `issue`, and `EPIC`
+is set and equals `manifest.issue` (the tasks are sections of one epic issue, not
+issues of their own), then:
+- Commit and PR bodies get `Part of #<EPIC>` only. **No `Closes` line** — a `Closes`
+  on the first task would close the whole epic after one merge.
+- Step (j) skips the per-task issue check.
+- The epic is closed by the driver in the Final report step, after the final review.
 
 Otherwise it is a **legacy single-issue** manifest: every task closes
 `manifest.issue` and no `Part of` line is emitted. This is the original
@@ -298,9 +313,11 @@ done
 
 ### j. Settle
 
-Set `status: "merged"`, write `finishedAt`, keep `pr`. Confirm the issue actually
-closed (`gh issue view <TASK_ISSUE(t)> --json state`); if the `Closes` trailer
-didn't fire, close it explicitly with a comment linking the PR.
+Set `status: "merged"`, write `finishedAt`, keep `pr`. In an epic-style manifest
+with per-task issues, confirm the issue actually closed
+(`gh issue view <TASK_ISSUE(t)> --json state`); if the `Closes` trailer didn't fire,
+close it explicitly with a comment linking the PR. Skip this check for an epic without
+per-task issues: the epic stays open until the Final review step.
 
 **No trailing sleep** — the cool-down is the next task's step (a).
 
@@ -347,7 +364,24 @@ recorded status is a hint and GitHub is the truth:
 
 Worst-case loss from a crash is one agy run.
 
+## Final review and epic close
+
+Runs only after every task is `merged` (never after a halt).
+
+1. If `FINAL_REVIEWER` is set, spawn one agent of that type (`opus` → `model: opus`,
+   `sonnet` → `model: sonnet`), cwd `$REPO_PATH`, on clean `main` after the last merge.
+   It reviews the epic as a whole: `git log --oneline` for the epic's merged PRs, and
+   `git diff <first-task-base>...main`. It checks cross-task consistency (duplicate
+   helpers, conflicting prefs keys, strings or permissions added twice, a gate's
+   contract changed later), the epic's acceptance and design decisions in the epic
+   body, and that `VERIFY` passes on `main`. It ends `VERDICT: APPROVE` or
+   `VERDICT: BLOCK <reason>`. It may open a fix PR for small issues in the same way as
+   a task; it may not reopen merged scope.
+2. On `APPROVE` (or with no `FINAL_REVIEWER`), and only if the epic has no per-task
+   issues: `gh issue close <EPIC> --comment "Done: <PR list>"`.
+3. On `BLOCK`: leave the epic open, report the reason, stop.
+
 ## Final report
 
-A table: task → issue → PR → status → wall clock. Then the resume command if
-anything is outstanding.
+A table: task → issue → PR → status → wall clock. Then the final review verdict, the
+epic's state, and the resume command if anything is outstanding.
