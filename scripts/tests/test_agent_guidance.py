@@ -1,9 +1,12 @@
+import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -129,7 +132,8 @@ class ExplainerTest(unittest.TestCase):
     def test_safe_offline_html_and_unique_diagrams(self):
         output = explainer.render(self.data)
         self.assertIn("&lt;script&gt;", output)
-        self.assertNotIn("<script>", output)
+        self.assertNotIn("<script>unsafe", output)
+        self.assertEqual(output.count("<script>"), 1)  # the static copy helper only
         self.assertIn("default-src 'none'", output)
         self.assertIn('id="arrow-0"', output)
         self.assertIn('id="arrow-1"', output)
@@ -183,6 +187,204 @@ class ExplainerTest(unittest.TestCase):
         self.assertNotIn("password", key)
         self.assertNotIn("user", key)
         self.assertEqual(key, explainer.repository_key(worktree))
+
+    def test_unknown_keys_are_rejected_and_write_nothing(self):
+        cases = [
+            ({**self.data, "titel": "x"}, "titel"),
+            ({**self.data, "kind": "audit"}, "kind"),
+            ({**self.data, "sections": [{"heading": "H", "comment": ["c"]}]}, "comment"),
+            ({**self.data, "sources": [{"label": "L", "url": "https://example.org", "href": "x"}]}, "href"),
+            ({**self.data, "metadata": {"Rev": {"text": "t", "url": "https://example.org", "v": 1}}}, "v"),
+        ]
+        for data, fragment in cases:
+            with self.subTest(fragment=fragment), self.assertRaises(ValueError) as ctx:
+                explainer.render(data)
+            self.assertIn(fragment, str(ctx.exception))
+        with self.assertRaises(ValueError):
+            explainer.save(self.repo, "review-2", cases[2][0], self.home)
+        self.assertFalse((self.home / ".local").exists())
+
+    def test_autolinker_validates_urls_and_preserves_quoting(self):
+        data = {**self.data, "sections": [{"heading": "H", "paragraphs": [
+            "plain http://example.org/http and https://user:pass@example.org/x stay text",
+            'quoted "https://example.org/x?a=1&b=2" and trailing https://example.org/ok.',
+        ]}]}
+        output = explainer.render(data)
+        self.assertNotIn('href="http://', output)
+        self.assertNotIn("user:pass@example.org/x</a>", output)
+        self.assertIn("http://example.org/http", output)
+        self.assertIn("https://user:pass@example.org/x", output)
+        self.assertIn('href="https://example.org/x?a=1&amp;b=2"', output)
+        self.assertNotIn("&quot\"", output)
+        self.assertIn('href="https://example.org/ok"', output)
+
+    def review_data(self):
+        return {
+            "kind": "review",
+            "title": "Deep review: something",
+            "summary": "overview",
+            "sections": [
+                {"heading": "How this works", "paragraphs": ["the flow"]},
+                {"heading": "Finding 1 (should-fix): misleading name", "severity": "should-fix",
+                 "location": "src/main.kt:10", "paragraphs": ["why it matters"],
+                 "comments": ["rename this?"]},
+                {"heading": "Verdict and coverage", "paragraphs": ["Comment only"]},
+            ],
+        }
+
+    def test_review_mode_renders_index_badges_location_and_stamp(self):
+        output = explainer.render(self.review_data())
+        self.assertIn('id="finding-1"', output)
+        self.assertIn('href="#finding-1"', output)
+        self.assertIn("severity-should-fix", output)
+        self.assertIn('class="location"', output)
+        self.assertIn("src/main.kt:10", output)
+        self.assertRegex(output, r"Generated \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00 by agent-explainer\.py")
+        self.assertIn("color-scheme:light dark", output)
+        self.assertIn("@media print{:root{color-scheme:light", output)
+
+    def test_review_mode_validation(self):
+        for key in ("severity", "location", "comments"):
+            broken = json.loads(json.dumps(self.review_data()))
+            del broken["sections"][1][key]
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                explainer.render(broken)
+        broken = json.loads(json.dumps(self.review_data()))
+        broken["sections"][1]["comments"] = []
+        with self.assertRaises(ValueError):
+            explainer.render(broken)
+        broken = json.loads(json.dumps(self.review_data()))
+        broken["sections"][1]["severity"] = "critical"
+        with self.assertRaises(ValueError):
+            explainer.render(broken)
+        broken = json.loads(json.dumps(self.review_data()))
+        broken["sections"][-1]["heading"] = "Decision and coverage"
+        with self.assertRaises(ValueError):
+            explainer.render(broken)
+        for placeholder in ("<sha>", "<number>", "<owner>", "<repo>"):
+            broken = json.loads(json.dumps(self.review_data()))
+            broken["summary"] = f"base {placeholder} compared"
+            with self.subTest(placeholder=placeholder), self.assertRaises(ValueError) as ctx:
+                explainer.render(broken)
+            self.assertIn(placeholder, str(ctx.exception))
+
+    def test_placeholder_scan_ignores_content_fields(self):
+        data = self.review_data()
+        data["sections"][0]["paragraphs"] = [
+            "the template says https://github.com/<owner>/<repo>/pull/<number> literally"
+        ]
+        data["sections"][0]["steps"] = ["replace <owner> first"]
+        data["sections"][0]["code"] = "url = 'https://github.com/<owner>/<repo>'"
+        data["sections"][1]["comments"] = ["base <sha>...head <sha>, fill this in"]
+        output = explainer.render(data)
+        self.assertIn("&lt;owner&gt;", output)
+        self.assertIn("&lt;sha&gt;", output)
+
+    def test_placeholder_scan_still_covers_fill_in_slots(self):
+        mutations = [
+            ("heading", lambda d: d["sections"][1].update(heading="Finding 1 (<sha>): bad name")),
+            ("summary", lambda d: d.update(summary="base <sha> compared")),
+            ("metadata text", lambda d: d.update(
+                metadata={"PR": {"text": "#<number>", "url": "https://github.com/o/r/pull/1"}})),
+            ("metadata url", lambda d: d.update(
+                metadata={"PR": {"text": "#1", "url": "https://github.com/<owner>/<repo>/pull/1"}})),
+            ("location string", lambda d: d["sections"][1].update(location="see <sha>")),
+            ("location url", lambda d: d["sections"][1].update(
+                location={"text": "file:1", "url": "https://github.com/<owner>/<repo}/blob/x"})),
+            ("source label", lambda d: d.update(
+                sources=[{"label": "PR #<number>", "url": "https://github.com/o/r/pull/1"}])),
+            ("source url", lambda d: d.update(
+                sources=[{"label": "PR", "url": "https://github.com/<owner>/<repo>/pull/1"}])),
+        ]
+        for slot, mutate in mutations:
+            broken = json.loads(json.dumps(self.review_data()))
+            mutate(broken)
+            with self.subTest(slot=slot), self.assertRaises(ValueError) as ctx:
+                explainer.render(broken)
+            self.assertIn("placeholder", str(ctx.exception))
+
+    def test_skill_review_template_renders(self):
+        skill = (ROOT / "claude/skills/deep-review/SKILL.md").read_text()
+        marker = skill.index("Review template")
+        template = re.search(r"```json\n(.*?)```", skill[marker:], re.DOTALL).group(1)
+        values = {
+            "PR title or stack subject": "WeekCalibrator stack (#5065 ADR, #5069 spec, #5072 skeleton)",
+            "number": "5065",
+            "owner": "hellofresh",
+            "repo": "production-planning",
+            "sha": "ab33640fdb64f21d3e85dcc66474b4f006525ae4",
+            "base": "ab33640fdb64f21d3e85dcc66474b4f006525ae4",
+            "head": "4abcfb0499999999999999999999999999999999",
+            "line": "42",
+            "what": "ADR",
+        }
+
+        def fill(value):
+            if isinstance(value, str):
+                if value == "blocker | should-fix | nit | question":
+                    return "should-fix"
+                def substitute(match):
+                    name = match.group(1)
+                    if name not in values:
+                        raise AssertionError(f"template placeholder <{name}> has no fill value in the test")
+                    return values[name]
+                return re.sub(r"<([^>]+)>", substitute, value)
+            if isinstance(value, list):
+                return [fill(item) for item in value]
+            if isinstance(value, dict):
+                return {key: fill(item) for key, item in value.items()}
+            return value
+
+        data = fill(json.loads(template))
+        leftover = re.search(r"<[^>]+>", json.dumps(data))
+        self.assertIsNone(leftover, f"unfilled placeholder in template: {leftover and leftover.group(0)}")
+        output = explainer.render(data)
+        self.assertIn('id="finding-1"', output)
+        self.assertIn('href="#finding-1"', output)
+        self.assertIn("severity-should-fix", output)
+        self.assertIn('class="location"', output)
+        self.assertEqual(output.count('class="copy"'), 1)
+        self.assertIn("Generated ", output)
+        self.assertIn("https://github.com/hellofresh/production-planning/pull/5065", output)
+        self.assertIn("https://github.com/hellofresh/production-planning/compare/ab33640f", output)
+
+    def test_generic_mode_skips_review_validation(self):
+        generic = json.loads(json.dumps(self.review_data()))
+        del generic["kind"]
+        generic["sections"][-1]["heading"] = "Decision and coverage"
+        generic["summary"] = "base <sha> compared"
+        output = explainer.render(generic)
+        self.assertNotIn('id="finding-1"', output)
+        self.assertIn("severity-should-fix", output)  # explicit severity still renders as a badge
+
+    def test_location_link_and_plain_text(self):
+        data = self.review_data()
+        data["sections"][1]["location"] = {"text": "main.kt:10",
+                                           "url": "https://github.com/o/r/blob/abc/main.kt#L10"}
+        output = explainer.render(data)
+        self.assertIn('href="https://github.com/o/r/blob/abc/main.kt#L10"', output)
+        for bad_location in ({"text": "x", "url": "http://example.org"},
+                             {"text": "x", "url": "https://u:p@example.org"},
+                             {"text": "x", "url": "https://example.org", "line": 5}):
+            data["sections"][1]["location"] = bad_location
+            with self.subTest(location=bad_location), self.assertRaises(ValueError):
+                explainer.render(data)
+        data["sections"][1]["location"] = "see https://example.org/a"
+        output = explainer.render(data)
+        self.assertNotIn('href="https://example.org/a"', output)
+
+    def test_csp_hash_matches_inline_script(self):
+        output = explainer.render(self.data)
+        csp = re.search(r"script-src 'sha256-([^']+)'", output).group(1)
+        script = re.search(r"<script>(.*?)</script>", output, re.DOTALL).group(1)
+        digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+        self.assertEqual(csp, digest)
+        self.assertNotIn("script-src 'unsafe-inline'", output)
+
+    def test_copy_script_checks_execcommand_result(self):
+        output = explainer.render(self.data)
+        self.assertIn("copied = document.execCommand('copy')", output)
+        self.assertIn("Copy failed — select manually", output)
 
     def test_bad_input_and_open_failure(self):
         for data in [None, {}, {**self.data, "sections": "not-list"}]:

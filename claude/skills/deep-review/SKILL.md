@@ -223,7 +223,18 @@ copy-to-clipboard blocks), and keep the explanation in `paragraphs`. Make every
 reference clickable: give pinned SHAs as full commit or compare URLs (metadata
 values accept `{"text": "...", "url": "https://..."}`, and bare https URLs in
 paragraphs are auto-linked), and list all stacked PRs and key files under
-`sources`. Open the file once unless the user says not to. Never upload it or
+`sources`. Every `Finding ...` section carries a `severity` (blocker |
+should-fix | nit | question — rendered as a colored badge) and a `location`:
+a plain `path:line` string, or `{"text": "...", "url": "https://..."}` linking
+to the exact line on GitHub at the pinned SHA. Section order is fixed as in
+the template; the headings of the non-finding sections are free text — the
+renderer only requires the `Finding` prefix on finding sections and one heading
+containing `Verdict`. Leftover `<sha>`/`<number>`/`<owner>`/`<repo>`
+placeholders in fill-in slots (summary, headings, metadata, location, sources)
+fail the render, so fill every placeholder — quoting them inside paragraphs,
+code or comments is fine. The `Reviewed`
+metadata key is optional — the renderer stamps the UTC generation time itself.
+Open the file once unless the user says not to. Never upload it or
 include credentials/unnecessary production data. A small re-review delta can
 stay in chat with the existing artifact path; do not create another tab just to
 confirm a fix. A clean review still gets a brief behavior overview, not invented
@@ -233,15 +244,20 @@ Review template for the artifact input JSON (sections in this order):
 
 ```json
 {
+  "kind": "review",
   "title": "Deep review: <PR title or stack subject>",
   "summary": "One paragraph: verdict-flavored overview for someone who reads nothing else.",
   "sections": [
+    {"heading": "What changed since last review",
+     "paragraphs": ["re-reviews only: new commits since the previous review, which prior findings they fix or leave open"]},
     {"heading": "How this works (assembled stack)",
      "paragraphs": ["problem + main flow, stack-relative if stacked"],
      "flow": ["step", "step", "step"]},
     {"heading": "Prior findings and concerns - status",
      "paragraphs": ["per prior point: fixed / accepted / deferred / unresolved, with evidence"]},
     {"heading": "Finding N (severity, PR): short title",
+     "severity": "blocker | should-fix | nit | question",
+     "location": "path/to/file.ext:<line>",
      "paragraphs": ["Why this matters: context, expected vs actual, consequence, fix direction"],
      "comments": ["exactly the copy-pasteable comment text"]},
     {"heading": "Verified claims (checked, not assumed)",
@@ -252,13 +268,13 @@ Review template for the artifact input JSON (sections in this order):
   "metadata": {
     "PR": {"text": "#<number>", "url": "https://github.com/<owner>/<repo>/pull/<number>"},
     "Pinned revisions": {"text": "base <sha>...head <sha>",
-                         "url": "https://github.com/<owner>/<repo>/compare/<base>...<head>"},
-    "Reviewed": "<date>"
+                         "url": "https://github.com/<owner>/<repo>/compare/<base>...<head>"}
   },
   "sources": [{"label": "PR #<number> (<what>)", "url": "https://github.com/<owner>/<repo>/pull/<number>"}]
 }
 ```
 
+Omit the leading "What changed since last review" section for a first review.
 For a stack, one "Finding N" section per finding with the owning PR in the
 heading; metadata's compare URL spans the whole stack's merge base to top head.
 Dark mode is automatic (the page follows the system theme); no toggle needed.

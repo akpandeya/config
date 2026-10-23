@@ -190,15 +190,25 @@ python3 scripts/agent-explainer.py \
 Pages live at `~/.local/share/agent-explainers/<repo-key>/<topic>.html`, outside
 Git; worktrees share their repository identity. Reusing a topic updates the page.
 The renderer escapes input and uses inline SVG/CSS; the only script is a static
-copy-to-clipboard helper for `comments` blocks (no review content is ever
-interpolated into it), and there are no fonts or other network resources.
-Colors follow the system light/dark theme automatically. Sources and bare
-https URLs in text are clickable HTTPS links, not fetched content. Metadata
-values may be `{"text": "...", "url": "https://..."}` to render as a hyperlink
-(useful for pinned commit SHAs). Use synthetic examples, not credentials or
-unnecessary production data.
-`--no-open` saves without launching a browser. A failed open reports the saved
-path, not a false success.
+copy-to-clipboard helper for `comments` blocks (no content is ever interpolated
+into it — the CSP header pins it by sha256 hash), and there are no fonts or
+other network resources. Colors follow the system light/dark theme and reset to
+the light palette when printing. Each page stamps its own UTC generation time.
+Unknown JSON keys are rejected before anything is written. Sources and bare
+https URLs in text are clickable links, not fetched content; `http://` or
+credentialed URLs stay plain text. Metadata values may be
+`{"text": "...", "url": "https://..."}` to render as a hyperlink (useful for
+pinned commit SHAs); a `Reviewed` date key is optional — the generation stamp
+usually replaces it. Sections may carry a `location` (plain `path:line` string
+or `{"text", "url"}`) shown muted under the heading. With top-level
+`"kind": "review"`, every `Finding ...` section needs a `severity` (blocker |
+should-fix | nit | question, rendered as a colored badge), a `location` and at
+least one `comments` entry, some heading must contain `Verdict`, findings are
+indexed under the summary with anchor links, and leftover
+`<sha>`/`<number>`/`<owner>`/`<repo>` placeholders in fill-in slots fail the
+render (quoting them inside paragraphs, code or comments is fine). Use
+synthetic examples, not credentials or unnecessary production data. A failed
+browser open reports the saved path, not a false success.
 
 ### Review boundaries and portability
 
