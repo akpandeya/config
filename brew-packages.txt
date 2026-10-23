@@ -20,7 +20,7 @@ kitty
 zsh
 starship
 neovim
-kotlin-lsp
+# kotlin-lsp: installed manually (NOT brew) - see nvim/CHEATSHEET.md
 tree-sitter-cli
 ripgrep
 fd

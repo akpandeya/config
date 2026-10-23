@@ -67,10 +67,15 @@ These keymaps activate when a language server attaches to the buffer (e.g., Kotl
 
 If `gd` only searches within the current file, check `:LspInfo`: without an attached
 server, Vim's built-in `gd` is still active. For Kotlin, `:LspLog` may report
-`This build of kotlin-server has expired`. Update it with
-`brew upgrade --cask kotlin-lsp`, then reopen Neovim and let the project finish
-loading. Kotlin LSP is installed through Homebrew, not Mason; its prerelease
-builds can expire.
+`This build of kotlin-server has expired` (prerelease builds expire). Update with
+`kotlin-lsp-update`, then reopen Neovim and let the project finish loading.
+
+Kotlin LSP is installed manually under `~/.local/share/kotlin-lsp/<version>` with a
+symlink at `~/.local/bin/kotlin-lsp` — NOT through Homebrew. Brew quarantines every
+cask update and macOS Gatekeeper then blocks the unsigned `intellij-server` binary,
+which kills the LSP (see Kotlin/kotlin-lsp#194). curl-based downloads get no
+quarantine xattr, so Gatekeeper never fires. Do not add `kotlin-lsp` back to
+`brew-packages.txt`.
 
 ---
 
