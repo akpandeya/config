@@ -214,13 +214,54 @@ before the finding list.
 
 For a substantial review, also produce the local HTML explanation described in
 the shared communication policy, under a stable `pr-<number>` topic for that
-repository. Include the PR URL, pinned revision, overview, each finding and its
-explanation, verdict and coverage gaps. Keep pasteable comments distinct from
-explanations there too. Open the file once unless the user says not to.
-Never upload it or include credentials/unnecessary production data. A small
-re-review delta can stay in chat with the existing artifact path; do not create
-another tab just to confirm a fix. A clean review still gets a brief behavior
-overview, not invented findings.
+repository. Use the review template below for the input JSON so every review
+artifact has the same shape. Include the PR URL, pinned revision, overview,
+each finding and its explanation, verdict and coverage gaps. Keep pasteable
+comments distinct from explanations there too: put each finding's copy-pasteable
+comment text in the section's `comments` list (the renderer shows them as
+copy-to-clipboard blocks), and keep the explanation in `paragraphs`. Make every
+reference clickable: give pinned SHAs as full commit or compare URLs (metadata
+values accept `{"text": "...", "url": "https://..."}`, and bare https URLs in
+paragraphs are auto-linked), and list all stacked PRs and key files under
+`sources`. Open the file once unless the user says not to. Never upload it or
+include credentials/unnecessary production data. A small re-review delta can
+stay in chat with the existing artifact path; do not create another tab just to
+confirm a fix. A clean review still gets a brief behavior overview, not invented
+findings.
+
+Review template for the artifact input JSON (sections in this order):
+
+```json
+{
+  "title": "Deep review: <PR title or stack subject>",
+  "summary": "One paragraph: verdict-flavored overview for someone who reads nothing else.",
+  "sections": [
+    {"heading": "How this works (assembled stack)",
+     "paragraphs": ["problem + main flow, stack-relative if stacked"],
+     "flow": ["step", "step", "step"]},
+    {"heading": "Prior findings and concerns - status",
+     "paragraphs": ["per prior point: fixed / accepted / deferred / unresolved, with evidence"]},
+    {"heading": "Finding N (severity, PR): short title",
+     "paragraphs": ["Why this matters: context, expected vs actual, consequence, fix direction"],
+     "comments": ["exactly the copy-pasteable comment text"]},
+    {"heading": "Verified claims (checked, not assumed)",
+     "paragraphs": ["what was verified against the pinned SHAs; settled points not re-raised"]},
+    {"heading": "Verdict and coverage",
+     "paragraphs": ["the explicit verdict + one or two sentences; what was checked, what was not"]}
+  ],
+  "metadata": {
+    "PR": {"text": "#<number>", "url": "https://github.com/<owner>/<repo>/pull/<number>"},
+    "Pinned revisions": {"text": "base <sha>...head <sha>",
+                         "url": "https://github.com/<owner>/<repo>/compare/<base>...<head>"},
+    "Reviewed": "<date>"
+  },
+  "sources": [{"label": "PR #<number> (<what>)", "url": "https://github.com/<owner>/<repo>/pull/<number>"}]
+}
+```
+
+For a stack, one "Finding N" section per finding with the owning PR in the
+heading; metadata's compare URL spans the whole stack's merge base to top head.
+Dark mode is automatic (the page follows the system theme); no toggle needed.
 
 ## 7. Tone for the comment text
 

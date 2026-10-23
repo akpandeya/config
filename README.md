@@ -189,9 +189,14 @@ python3 scripts/agent-explainer.py \
 
 Pages live at `~/.local/share/agent-explainers/<repo-key>/<topic>.html`, outside
 Git; worktrees share their repository identity. Reusing a topic updates the page.
-The renderer escapes input and uses inline SVG/CSS with no scripts, fonts or
-other network resources. Sources are clickable HTTPS links, not fetched content.
-Use synthetic examples, not credentials or unnecessary production data.
+The renderer escapes input and uses inline SVG/CSS; the only script is a static
+copy-to-clipboard helper for `comments` blocks (no review content is ever
+interpolated into it), and there are no fonts or other network resources.
+Colors follow the system light/dark theme automatically. Sources and bare
+https URLs in text are clickable HTTPS links, not fetched content. Metadata
+values may be `{"text": "...", "url": "https://..."}` to render as a hyperlink
+(useful for pinned commit SHAs). Use synthetic examples, not credentials or
+unnecessary production data.
 `--no-open` saves without launching a browser. A failed open reports the saved
 path, not a false success.
 
