@@ -231,7 +231,7 @@ class WatcherTest(unittest.TestCase):
             env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
                    "HOME": str(root), "FAKE_STATE": str(root), "FAKE_RESPONSES": json.dumps(responses)}
             result = subprocess.run(
-                ["bash", str(ROOT / "claude/scripts/pr-wait-green.sh"), "23", "--repo", "org/repo",
+                [str(ROOT / "claude/scripts/pr-wait-green.sh"), "23", "--repo", "org/repo",
                  "--interval", "0", "--max-ticks", "2"],
                 env=env, capture_output=True, text=True, timeout=20,
             )
