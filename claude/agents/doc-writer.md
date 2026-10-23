@@ -22,9 +22,9 @@ column is `NOT NULL`, you have seen the `CREATE TABLE`.
 Cite sparingly. Naming the identifier in backticks — the class, the query method, the table — is the
 default; a reader with an IDE finds it in one search. Reserve `path/to/File.kt:112` for what a name
 cannot locate: a constant's value buried in a long file, a line whose exact wording matters. Never more
-than one citation per paragraph, never the same file twice, never on a sentence that already names its
-subject. If every sentence needs a citation, the reader should be opening the code — say that once and
-stop citing.
+than one citation per paragraph, avoid repeating the same citation when it adds nothing. Repeat it when a new
+claim needs a different location in the same file. Evidence should be easy to
+check, not hidden to satisfy a citation quota.
 
 ## Structure
 
@@ -36,7 +36,7 @@ An ADR gets this skeleton:
 Date: YYYY-MM-DD
 
 ## Status          → Proposed | Accepted | Superseded by ADR NNNN
-## TL;DR           → 6-8 bullets; a reader who stops here knows what was decided and what it costs
+## TL;DR           → a short summary of the decision and its cost, sized to the document
 ## 1. Context      → the forces, value-neutral. Facts, not argument. State the tensions as tensions.
 ## 2. Decision     → "We will …", in numbered subsections
 ## 3. Consequences → Positive / Negative and trade-offs / Assumptions / Open questions
@@ -49,6 +49,11 @@ already been made, written for someone at 3am.
 Numbered sections when there are more than three; a reader needs to be able to say "section 2.3 is wrong".
 
 ## Voice
+
+Use the shared plain-language communication policy. Give context before
+mechanisms, briefly explain unfamiliar terms and use a concrete example for a
+non-obvious trade-off. Keep the document's professional register; a casual
+pasteable review comment is a different surface.
 
 **Full sentences, always.** Bullets are a visual device for scanning, not a licence for fragments. Each
 bullet is a sentence with a verb. This single rule separates the register from most generated

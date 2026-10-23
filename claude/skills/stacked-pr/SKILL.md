@@ -38,9 +38,10 @@ Two distinct triggers produce the same symptom — the bottom PR of the stack
 shows `mergeStateStatus: DIRTY` / `mergeable: CONFLICTING` on GitHub:
 
 1. **A lower PR in the same stack merges.** GitHub squash-merges it and
-   force-rewrites every downstream branch's remote history onto the new trunk
-   tip, retargeting the next PR's base. A plain `git push` on the downstream
-   branch gets rejected ("fetch first").
+   may be followed by configured stack automation rewriting downstream branches
+   and retargeting PR bases. This is not a general GitHub squash-merge guarantee:
+   inspect the actual remote refs and PR bases. A rewritten downstream branch
+   can reject a plain `git push` ("fetch first").
 2. **An unrelated PR merges to trunk first**, touching the same files as the
    bottom of the stack (real-world case: someone else's PR landed on `master`
    with conflicting changes to a file our stack's bottom PR also touched).
@@ -66,10 +67,15 @@ registers the stack server-side without writing local tracking state, and
 `checkout` is what actually re-imports it locally. Don't take that "not part
 of a stack" error as proof the link failed.
 
+Before a rebase or force-with-lease push, confirm it is within the user's
+authorized stack-sync scope. Preserve dirty files and local-only commits first;
+do not silently stash, reset, switch another session's branch or amend history.
+
 If a conflict resolution touches a commit that isn't the tip (e.g. the fix
 belongs semantically to an earlier layer's commit, and just leaving it as a
 new commit on the tip would put the fix in the wrong PR): `git checkout
-<that-layer's-branch>`, apply the fix, `git commit --amend`, then run `gh
+<that-layer's-branch>`, apply the fix and, only with explicit amendment approval,
+`git commit --amend`, then run `gh
 stack rebase` again from the top of the stack — it re-cascades the amendment
 through every branch above it, including re-detecting conflicts if any.
 
@@ -89,12 +95,13 @@ If the stack is **not** registered (plain manual chain, no `gh stack link`/
 fetch origin <branch>` and check for a "forced update" line, and `gh pr view
 <downstream-pr> --json baseRefName` for an unexpected retarget. If either
 shows up:
-1. Confirm any local-only commit with the actual fix is safe (`git branch -r
-   --contains <sha>` — if it's on some other remote branch, or nowhere, it's
-   still recoverable; don't reset before checking this).
-2. `git reset --hard origin/<branch>` to resync to GitHub's rewritten history.
-3. Cherry-pick the local-only fix commit(s) back on top.
-4. Re-run the build/test gate, then push — this time it should fast-forward.
+1. Inspect status and the exact local-only/remote-only commits. Record the
+   original tip; a commit being absent from remote branches is not a backup.
+2. Explain the divergence and propose a non-destructive recovery. Create a
+   named backup ref only with authorization; do not discard dirty files.
+3. Apply only the approved rebase/cherry-pick recovery. Do not use a hard reset
+   as a default repair, and do not rewrite someone else's remote work.
+4. Re-run the relevant build/test gate and verify the intended push range.
 
 ## Respond to the user
 

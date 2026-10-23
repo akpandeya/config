@@ -1,22 +1,20 @@
 ---
 name: ci-fix
-description: Try to fix the failing CI checks on a PR. Reproduce locally, apply minimal fix, commit + push.
-allowed-tools: Agent
+description: Fix failing CI on a specified PR with a minimal change. Use when the user requests a CI fix or an explicitly authorized workflow includes repair; watching a PR alone does not trigger repair.
+allowed-tools: Agent, Bash, Read
 ---
 
-The user is asking you to fix CI on a specific PR. Extract the PR
-number from their message; if absent, ask.
+Resolve the repository and PR, not just a number that can collide across repos.
+Use the configured `ci-fixer` agent when available, with the exact target, any
+observer log path, the failure and the authorized scope. If the harness has no
+custom agent support, perform the same bounded procedure directly.
 
-Delegate immediately to the `ci-fixer` subagent. Do NOT attempt the
-fix in the main session — the subagent has the right tools, permission
-boundaries, and a tight token budget.
+Pass this contract: investigate current checks, reproduce, make a minimal fix and
+verify. Commit and push only if that publication is explicitly authorized by the
+user or enclosing workflow. Do not assume permission from an observer invocation.
+One fix attempt per invocation; surface non-mechanical failures rather than
+refactoring unrelated code. Draft replies to design questions for the user;
+never post them or promise future work on the user's behalf.
 
-`Agent(subagent_type="ci-fixer", prompt="Fix CI on PR #<n>. The
-pr-watch / pr-create skills write their observer log to
-~/.jarvis/logs/pr-wait-<n>.log — tail it if it exists. Investigate,
-reproduce, apply minimal fix, commit with fix(ci): prefix, push. If
-the failure is not actionable (bot asking a design question, flaky),
-reply on the PR with one short sentence and exit.")`
-
-When the subagent returns, surface the fix commit SHA (if any) or its
-one-line verdict to the user. Nothing more.
+Report the outcome plainly, including a commit only if one was actually created
+and a push only if it succeeded. If a fix remains local, say so.

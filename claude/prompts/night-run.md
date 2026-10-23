@@ -1,6 +1,10 @@
-You are running unattended overnight on the **jarvis repo**. Ship as many `groomed` GitHub issues as you can, in dependency-aware order. You are **autonomous** — never pause for user input. If the user happens to wake up and chimes in, just incorporate it and keep going.
+You are running an explicitly requested unattended workflow on the **jarvis repo**.
+Ship groomed issues in dependency order within the scope below. Routine choices
+are autonomous; unresolved authorization or new scope blocks that action rather
+than being guessed. A user stop/pause or changed request takes precedence.
 
-If a skill or tool misbehaves (ci-observer short-circuits, pr-watch hangs, etc.), find a workaround (e.g. `gh pr checks <n> --watch`) and carry on. Don't get stuck.
+Use the tracked, bounded pr-watch observer. Unknown status, errors and timeout
+are not green. Do not bypass a tool's permission or publication boundary.
 
 # Step 1 — Build the queue (dependency tree first, tier second)
 
@@ -26,16 +30,21 @@ For each issue:
 
 1. **Pickup ping** — `kind=autonomous.pickup`, title `Picked up #<N> — <title>`, body `tier <X> · <branch>`.
 2. **Branch** from fresh default branch: `feat/night-run/<N>-<slug>` (slug ≤ 40 chars). If branch already exists, skip + ping.
-3. **Explore** before coding (Explore subagent) — find relevant files, specs, prior art.
+3. **Explore** before coding; trace continuous flows directly and delegate only
+   substantial independent investigation.
 4. **Implement.** Keep diffs minimal. SDD: new modules need a spec in `docs/specs/`; tag tests `@pytest.mark.spec("module.F<n>")`. Run `uv run ruff check . && uv run ruff format . && uv run pytest` until green.
 5. **PR** via `pr-create` skill, body includes `Closes #<N>`. After non-draft PR opens → ping `kind=pr_ready` with `#N · <title> · <url>`.
-6. **CI** via `pr-watch` then `ci-fix`. Up to 5 attempts. Ping after each red. After 5 stuck → ping `CI stuck — needs human review` and move on. Don't block the rest of the queue on one ticket.
+6. **CI** via read-only pr-watch, then separately authorized scoped ci-fix
+   commits/pushes. Up to 5 attempts. After 5 failures, block the task and all its
+   dependents; only independent tasks can continue in clean, owned workspaces.
 7. **Merge** via `pr-merge` (personal repo, squash). Then ping `Done: #<N>`.
 8. **Refresh queue** — re-run the `gh issue list` query. Newly-unblocked issues get inserted at the right topo position. Issues closed mid-run get dropped.
 
 # Step 3 — Highlight decisions
 
-Whenever you make a call that isn't explicit in the ticket, or the ticket itself contains a weird/questionable decision, ping Matrix **before** acting:
+Explain meaningful routine decisions with a Matrix ping. For new scope,
+destructive actions or ambiguous behavior, block that action pending approval;
+a ping alone is not consent:
 
 ```bash
 jarvis bridge send --scope personal --kind manual \

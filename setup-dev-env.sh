@@ -324,6 +324,7 @@ link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
 # jarvis-continue-in-phone, slack-catchup) are handled separately above
 # or by Jarvis itself.
 for skill_dir in "$REPO_DIR"/claude/skills/*/; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
     skill="$(basename "$skill_dir")"
     case "$skill" in
         jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
@@ -331,20 +332,9 @@ for skill_dir in "$REPO_DIR"/claude/skills/*/; do
     link_config "$skill_dir" "$HOME/.claude/skills/$skill"
 done
 
-# hf-ktx lives in the work repo (hf-workbench), not this personal repo.
-# Symlink it in only on work machines.
-if [ "$SETUP_MODE" = "work" ]; then
-    link_config "$HOME/code/work/hf-workbench/skills/hf-ktx" \
-                "$HOME/.claude/skills/hf-ktx"
-fi
-
 # --- Setup Shared Antigravity (AGY) & Claude Global Settings and Skills ---
 
-# Global Instructions / Memory files
-link_config "$REPO_DIR/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link_config "$REPO_DIR/claude/RTK.md"    "$HOME/.claude/RTK.md"
-link_config "$REPO_DIR/gemini/GEMINI.md" "$HOME/.gemini/GEMINI.md"
-link_config "$REPO_DIR/opencode/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"
 link_config "$REPO_DIR/opencode/agent"      "$HOME/.config/opencode/agent"
 link_config "$REPO_DIR/opencode/command"    "$HOME/.config/opencode/command"
 
@@ -379,6 +369,7 @@ link_config "$REPO_DIR/claude/personal-skills-plugin.json" \
 # issue-decompose and agy-drive are excluded here since Antigravity gets
 # its own gemini-tailored versions from gemini/skills/ below.
 for skill_dir in "$REPO_DIR"/claude/skills/*/; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
     skill="$(basename "$skill_dir")"
     case "$skill" in
         jarvis-suggest|jarvis-continue-in-phone|slack-catchup|issue-decompose|agy-drive) continue ;;
@@ -393,15 +384,29 @@ for skill in issue-decompose agy-drive; do
                 "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
 done
 
+# Private skill links must follow creation of the Gemini plugin directory.
+PRIVATE_INSTALLER="$HOME/code/work/hf-workbench/scripts/install-agent-context.py"
+if [ "$SETUP_MODE" = "work" ] && [ -f "$PRIVATE_INSTALLER" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would install private skills and context via $PRIVATE_INSTALLER --links-only"
+    else
+        python3 "$PRIVATE_INSTALLER" --links-only
+    fi
+fi
+if [ "$DRY_RUN" = "1" ]; then
+    python3 "$REPO_DIR/scripts/install-agent-instructions.py" --dry-run
+else
+    python3 "$REPO_DIR/scripts/install-agent-instructions.py"
+fi
+
 # --- End Shared Antigravity Setup ---
 
 # rtk: CLI proxy that filters/summarizes command output before it reaches
 # the LLM. The Claude Code half runs with --hook-only: it merges the
 # PreToolUse hook into settings.json and nothing else. RTK.md is repo-owned
-# (claude/RTK.md, linked above) and referenced by absolute path from the
-# shared AGENTS.md — a plain `rtk init -g --auto-patch` would append a
-# relative @RTK.md line through the CLAUDE.md symlink chain into the tracked
-# repo file, so never run it against a real HOME. The OpenCode half only
+# (claude/RTK.md, linked above) and composed into Claude/OpenCode instructions.
+# A plain `rtk init -g --auto-patch` would mutate the generated instructions,
+# so never run it against a real HOME. The OpenCode half only
 # installs the plugin file. Both calls are idempotent and non-interactive
 # (--auto-patch), so safe to re-run on every setup.
 if command -v rtk >/dev/null 2>&1; then
@@ -427,7 +432,7 @@ for prompt_file in "$REPO_DIR"/claude/prompts/*.md; do
     link_config "$prompt_file" \
                 "$HOME/.claude/prompts/$(basename "$prompt_file")"
 done
-for agent in ci-observer.md ci-fixer.md; do
+for agent in ci-observer.md ci-fixer.md doc-writer.md; do
     link_config "$REPO_DIR/claude/agents/$agent" \
                 "$HOME/.claude/agents/$agent"
 done

@@ -4,6 +4,11 @@ persona: autopilot
 
 Pick up and implement a single ticket end-to-end.
 
+This explicit workflow authorizes implementation, relevant CI repair, publication
+and the notifications described below. It does not override plan-only mode,
+repository policy or a narrower user request. Pinging a decision is not consent
+to expand scope. Work merges still require a human.
+
 **Detect profile first:**
 
 ```bash
@@ -19,13 +24,15 @@ If no ticket was given, ask the user for the number / key before continuing.
 
 ## Step 1 — Read the ticket and the code
 
-Read the ticket in full (including all comments). Then **always explore the relevant code** via an Explore subagent before forming any opinion — never assume from the ticket text alone. Identify: which files/modules, existing utilities to reuse, related specs, prior art in git log.
+Read the ticket and relevant code before forming an opinion. Trace a continuous
+flow directly; delegate only substantial independent investigation when useful.
+Identify affected files, reusable helpers, specs and prior art.
 
 If the ticket looks stale, duplicate, or out-of-scope for this repo: stop, surface it, ask the user whether to close / skip / rescope. Don't proceed silently.
 
 ## Step 2 — Clarify
 
-Ask the minimum questions to fill genuine gaps (max 3–4, batched). Push back if an answer feels under-specified — surface the tradeoff, don't rubber-stamp.
+Ask one focused question at a time for genuine gaps. Explain the tradeoff plainly.
 
 Skip questions you can answer from code reading.
 
@@ -52,11 +59,13 @@ BASE="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | 
 [ -z "$BASE" ] && git remote set-head origin --auto 2>/dev/null && \
   BASE="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
 [ -z "$BASE" ] && BASE="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)"
-git checkout "$BASE" && git pull && git checkout -b <prefix>/<short-slug>
+test -n "$BASE" && git checkout "$BASE" && git pull --ff-only && git checkout -b <prefix>/<short-slug>
 ```
 
 - **Personal:** use `feat/`, `fix/`, `chore/` prefixes as appropriate.
 - **Work:** use `feature/<JIRA-KEY>-<short-slug>` or `patch/<JIRA-KEY>-<short-slug>` (feature for new functionality, patch for fixes).
+- Check status and workspace ownership before switching. Preserve unrelated
+  local changes. Resolve/create the real work ticket before creating the branch.
 
 ## Step 5 — Implement
 
@@ -84,7 +93,9 @@ jarvis bridge send --scope "$SCOPE" --kind pr_ready \
 
 ## Step 8 — CI
 
-Watch CI via the `pr-watch` skill. If it goes red, use the `ci-fix` skill. Attempt up to **5 times** (both personal and work):
+Watch CI via the read-only `pr-watch` skill. This end-to-end workflow separately
+authorizes `ci-fix` for the exact PR, including scoped commits/pushes. Attempt up
+to **5 times**; merely invoking pr-watch elsewhere never authorizes repair.
 
 ```bash
 # after each failed attempt:
@@ -113,7 +124,8 @@ For actionable feedback on either profile: implement the fix, push, then notify 
 
 ## Step 10 — Done
 
-When CI is green and the PR is merged (personal: use `pr-merge` skill; work: human merges):
+When CI is green, report the actual state: merged only after confirmation
+(personal: pr-merge); work PRs may instead be ready for human review/merge.
 
 ```bash
 # personal
@@ -123,8 +135,8 @@ jarvis bridge send --scope personal --kind manual \
 
 # work
 jarvis bridge send --scope work --kind manual \
-  --title "Done: <KEY> — <title>" \
-  --body "PR merged (or awaiting human merge): <PR URL>"
+  --title "Ready for human review: <KEY> — <title>" \
+  --body "Draft PR; awaiting human review and merge: <PR URL>"
 ```
 
 ---
@@ -133,7 +145,8 @@ jarvis bridge send --scope work --kind manual \
 - Never push directly to the default branch.
 - No `--no-verify`, no force-push.
 - Work only: never post replies to human PR comments — compose drafts and notify via bridge.
-- Before any action outside the normal code→PR→merge loop (creating an issue, closing/labelling/commenting on an issue, any inferred undocumented action), send a decision ping **first**:
+- Before actions outside the authorized scope, ask for approval and stop that
+  action. A decision ping can explain a routine in-scope choice, not authorize it:
   ```bash
   jarvis bridge send --scope "$SCOPE" --kind manual \
     --title "⚠️ Decision: <what you are about to do>" \

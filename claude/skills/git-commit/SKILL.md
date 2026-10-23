@@ -1,6 +1,6 @@
 ---
 name: git-commit
-description: Create a git commit with the right message conventions (conventional prefix, [AI_Code] trailer on HelloFresh work repos). Use when the user asks to commit changes.
+description: Create a git commit with the repository's message and attribution conventions. Use when the user asks to commit changes.
 allowed-tools: Bash, Read
 ---
 
@@ -22,12 +22,9 @@ Only commit when the user has asked. Stage explicitly — `git add
 Conventional prefix: `feat:`, `fix:`, `chore:`, `docs:`,
 `refactor:`, `test:`, `ci:`. One line, what + why — not a file list.
 
-For work repos (`~/code/work/*`, hellofresh org), the commit message
-itself must contain `[AI_Code]` — the org's auto-labeler
-(`workflow-pr-label-for-ai-code`) only scans commit messages for that
-literal string (or `[Cursor_Code]` / `<noreply@anthropic.com>`),
-never the PR description, so a commit missing it gets no AI_Code
-label. Add a trailer line:
+For work repos, follow private/project attribution policy. The shared commit
+helper requires `[AI_Code]` in work-repo messages; a PR footer is not a
+substitute. Add the actual harness and model, not the example's values:
 
 ```
 [AI_Code] harness: <cli>, model: <model-id>
@@ -35,6 +32,7 @@ label. Add a trailer line:
 
 `harness` is the CLI producing the change (e.g. `opencode`,
 `claude-code`); `model` is the model that generated the work.
+Also preserve any co-author trailer required by the active harness.
 
 ## Commit
 

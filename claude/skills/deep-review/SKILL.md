@@ -1,7 +1,7 @@
 ---
 name: deep-review
-description: Deep-review a GitHub PR on code quality, correctness, hexagonal architecture, and anything else that stands out — every finding cross-checked against the live repo (not just the diff), written up as copy-pasteable comments in Avanindra's own tone, plus a final approve/request-changes call. Never posts anything to GitHub.
-allowed-tools: Bash, Read, Grep, Glob, Agent
+description: Deep-review a GitHub PR or stack with verified findings, a plain-language walkthrough of the changed behavior and every finding, short copy-pasteable comments in Avanindra's voice, and an evidence-based verdict. Use for PR reviews and re-reviews. Never posts anything to GitHub.
+allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 ---
 
 The user wants a PR reviewed. Extract the PR URL or `owner/repo#number` from
@@ -12,8 +12,9 @@ with no link and no PR open in conversation), ask.
 
 **Never post anything to GitHub.** No `gh pr review`, no `gh pr comment`, no
 `gh api ... -X POST` against comments/reviews endpoints — not even a draft
-review, not even with `--body` empty. This skill only prints findings to the
-chat. The user copy-pastes what they want, when they want. If you catch
+review, not even with `--body` empty. This skill reports findings in chat and,
+for substantial reviews, a local HTML explanation outside Git. The user
+copy-pastes what they want, when they want. If you catch
 yourself about to run a command that mutates the PR, stop.
 
 ## 1. Pin the target
@@ -171,13 +172,18 @@ writing it up:
 - **"Is this actually N+1 / a hot path?"** — grep for call sites to see if
   it's invoked once per request or in a loop before calling it a performance
   problem. State what you found, not what you assume.
-- Use the `Agent` tool (`Explore` type) for any of the above that needs
-  broader searching than 2-3 greps can answer.
+- Trace a continuous flow directly. Delegate only a substantial independent
+  investigation when the current harness and task permit it.
 
 Findings that don't survive this check get dropped or downgraded, not
 included for effect.
 
 ## 6. Output format
+
+Start with **How this works**: the problem the PR solves, the main flow, and
+what changes compared with the base revision. For a stack, explain the assembled
+behavior before attributing findings to individual PRs. Use a small diagram when
+it makes the flow easier to follow; do not turn the overview into a file list.
 
 For each finding:
 
@@ -187,13 +193,34 @@ For each finding:
 \`\`\`
 <copy-pasteable comment text — see tone section>
 \`\`\`
+
+**Why this matters**
+<context → step-by-step behavior → concrete expected-versus-actual example →
+consequence → direction of a fix, in plain language>
 ```
+
+The explanation is for the user, not part of the pasteable comment. Include it
+for every finding without waiting for a follow-up request. Define unfamiliar
+terms briefly, and use a small code snippet or diagram where it clarifies the
+mechanism. Scale the length to the point: a naming nit needs less than a race
+condition. Distinguish an implemented bug from a design gap, open question or
+preference. Never label the explanation by the reader's seniority.
 
 The label is per finding, so a review that only surfaces naming nits or
 genuine questions doesn't force a request-changes verdict. Group
 settled-by-discussion items separately from still-open ones. If this is a
 re-review, lead with a one-line "what changed since last time" summary
 before the finding list.
+
+For a substantial review, also produce the local HTML explanation described in
+the shared communication policy, under a stable `pr-<number>` topic for that
+repository. Include the PR URL, pinned revision, overview, each finding and its
+explanation, verdict and coverage gaps. Keep pasteable comments distinct from
+explanations there too. Open the file once unless the user says not to.
+Never upload it or include credentials/unnecessary production data. A small
+re-review delta can stay in chat with the existing artifact path; do not create
+another tab just to confirm a fix. A clean review still gets a brief behavior
+overview, not invented findings.
 
 ## 7. Tone for the comment text
 

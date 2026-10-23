@@ -37,7 +37,10 @@ Workflow:
      - Propose a split into 2–5 sub-issues, each with its own Problem / Scope / ACs and a `Blocked by:` line pointing at any prior sub-issue.
      - Present the proposed split as: titles + 1-line scopes + dependency order. Wait for my approval before filing.
      - On approval: file each sub-issue with `gh issue create`. Each sub-issue inherits `groomed` if it doesn't need design; otherwise inherits `needs-design`. Carry an appropriate tier per sub-issue (often the parent's tier; sometimes the foundational sub-issue jumps to tier-S).
-     - Update the parent issue body: add a `## Sub-issues` section listing the children with `Closes #N` keywords (so closing all sub-issues auto-closes the parent), and trim the parent's scope to "umbrella tracking — see sub-issues".
+     - Update the parent with a linked `## Sub-issues` list and native sub-issue
+       relationships where supported; trim scope to umbrella tracking. Do not use
+       closing keywords as dependency automation. Verify all children are complete
+       and get approval before closing the parent.
      - Add the `epic` label to the parent. Remove `groomed` from the parent (the epic itself isn't directly implementable).
      - The parent stays open until all sub-issues are closed.
 

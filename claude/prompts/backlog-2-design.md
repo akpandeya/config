@@ -30,7 +30,10 @@ Note: `needs-design` and `groomed` are mutually exclusive on open issues. Round-
      - STOP the design pass — don't design the whole thing as one spec.
      - Propose a split: 2–5 sub-issues, each with its own Problem / Scope / ACs and `Blocked by:` line. Titles + 1-line scopes + dependency order.
      - Wait for my approval, then file with `gh issue create`. Carry `needs-design` on sub-issues that genuinely need design (often the UI ones); leave `groomed` off for those, add `groomed` directly for the backend-primitive sub-issues that don't need design.
-     - Update the parent: add `## Sub-issues` section with `Closes #N` keywords, add the `epic` label, trim parent scope to umbrella tracking. Remove `needs-design` from the parent (the epic itself doesn't get designed; its sub-issues do).
+     - Update the parent with a linked `## Sub-issues` list and native sub-issue
+       relationships where supported. Add `epic`, trim scope to umbrella tracking
+       and remove `needs-design`. Closing keywords in an issue body do not make
+       the parent close when its children finish; check completion explicitly.
      - Move on to the next item in the design queue. The new design-needing sub-issues will surface for design pass on their own turn.
 
 2. Read the code it touches (use Explore subagents for non-trivial flows). Identify: existing components, design tokens / Tailwind utilities in use, routing/state patterns, prior art for similar screens. Do NOT redesign things outside the issue scope.

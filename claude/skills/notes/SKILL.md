@@ -17,11 +17,16 @@ conventions; the essentials:
 2. **Front matter is mandatory** — `type`, `date`, `tags`, `people`, `projects`, `status` (open/closed), optional `related:` wikilinks. Before writing, Grep existing notes for related topics and link them (`[[slug]]`), and add back-references where natural (a recurring issue links to every debrief that touched it).
 3. **Action items** in the uniform format so the dashboard can aggregate them:
    `- [ ] do the thing — @person, due YYYY-MM-DD`
-4. **Regenerate + ship**:
+4. **Regenerate**:
    ```bash
-   cd ~/code/personal/notes && python3 scripts/dashboard.py && git add -A && git commit -m "docs: <topic>" && git push
+   cd ~/code/personal/notes && python3 scripts/dashboard.py
    ```
    Never hand-edit `dashboard.md`.
+5. Saving a note does not authorize publishing it. If the user explicitly asks
+   to commit or push, inspect the diff, stage only the intended notes and generated
+   dashboard, and use the git-commit skill. Preserve unrelated changes. Keep work
+   notes out of a public repository; verify the destination before saving private
+   material and use the user's private work knowledge base when needed.
 
 ## Retrieval ("catch up on my notes", "what's open", "what do I owe people")
 

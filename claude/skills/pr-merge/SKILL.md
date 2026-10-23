@@ -1,6 +1,6 @@
 ---
 name: pr-merge
-description: Merge a PR respecting repo scope. Personal repos squash-merge; work repos nudge the user (HF policy — humans merge).
+description: Merge a PR respecting repo scope. Personal repos squash-merge; work repos remain for human merge.
 allowed-tools: Bash
 ---
 
@@ -24,7 +24,7 @@ Script behaviour:
   branch delete. Reports success.
 - **Work** (`$PWD` under `~/code/work/`): prints a nudge with the PR
   URL and rings the bell, then exits non-zero. **Do not try to
-  override this** — HF policy is that humans merge.
+  override this** — work policy requires a human merge.
 - **Unknown scope**: refuses; tells the user to run from a
   recognised repo.
 

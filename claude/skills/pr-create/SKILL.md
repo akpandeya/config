@@ -1,103 +1,35 @@
 ---
 name: pr-create
-description: Open a PR from the current feature branch (right gh account, concise human-readable body).
+description: Open a PR for the requested repository and feature branch, respecting the current harness, repository policy and the user's publication scope.
 allowed-tools: Bash, Read, Write
 ---
 
-You're creating a PR for the user. Do it mechanically — the hard part
-(gh account selection, push, create) is in the script.
-Your job is just the PR body.
+Check the repository, branch, intended base, status and unpushed commits first.
+Do not publish unrelated work. If committing is not already authorized, ask
+before committing and use the git-commit skill. Repository-specific ticket and
+branch requirements come from private/project context; obtain the actual ticket
+key before creating a branch when required.
 
-## Pre-flight
+Write a short body with `## Summary` and one to three meaningful bullets. Do not
+pad it to a word count, list every file or add a Test plan unless asked. Include
+the ticket reference in the repository's format and actual AI-tool attribution
+when required; never copy a stale model name from an example.
 
-Check working tree:
+Use the harness's native PR-creation tool when it is required. Respect its repo,
+head and session scope: do not create a PR in the wrong repository, and do not
+fall back to the shell when a native-tool failure does not authorize that.
+If the harness permits CLI creation, use:
 
-!`git status --short`
-
-!`git log --oneline -5`
-
-If there are uncommitted changes, ask the user whether to commit them
-first (don't auto-commit — user hasn't asked for that). If they want
-them committed, use the `git-commit` skill — it owns the message
-conventions (conventional prefix, the `[AI_Code]` trailer the
-hellofresh auto-labeler requires in commit messages) and the commit
-script.
-
-## Write the PR body
-
-Write a **concise** body to `/tmp/pr-body-$(date +%s).md`. Structure:
-
-```
-## Summary
-
-- 1–3 bullets describing the *change*, not the files. Focus on what
-  the user will notice or why this matters. No file-by-file lists.
+```bash
+~/code/personal/config/claude/scripts/pr-create.sh --title "<actual title>" --body-file "<actual body file>"
 ```
 
-Omit the Test plan section unless the user explicitly asks for one.
-Never add it on your own judgment — not for "unusual" changes, not
-"just in case."
+Use the chosen base and draft state explicitly when needed. Personal PRs normally
+open ready for review; work PRs remain drafts unless the user's policy says
+otherwise. Read organization labels and attribution requirements from private
+context, not hardcoded global defaults. Add only required labels and preserve
+unrelated ones. Work PRs are human-merged.
 
-If the branch name contains a Jira key (e.g. `feature/TGH-3550-...`),
-add a ticket reference line after the summary, with the key in square
-brackets so the Jira bot links the ticket:
-
-```
-Relates to [TGH-3550]
-```
-
-Do NOT include:
-- Emojis (unless the user asked for them)
-- Every modified filename
-- Detailed changelog; the commit message carries that
-
-DO include an attribution footer that identifies the AI tooling, in this shape:
-
-```
-Generated with AI [AI_Code] — harness: opencode, model: <model-id>
-```
-
-- `harness` is the CLI that produced the change (e.g. `opencode`).
-- `<model-id>` is the model that generated the work (e.g. `deepseek-ai/DeepSeek-V4-Pro-0813`).
-- Keep the `[AI_Code]` tag so it matches the repo's commit-message convention.
-
-Keep the body succinct and human-readable, roughly 100–150 words.
-
-## Open the PR
-
-Call the script yourself via the Bash tool. Do NOT paste a literal
-`<title>` / `<body-file>` — substitute the real values first. The
-shape is:
-
-```
-~/code/personal/config/claude/scripts/pr-create.sh \
-    --title "feat(x): ..." \
-    --body-file /tmp/pr-body-1234567890.md
-```
-
-For work repos (hellofresh org), always pass `--draft` so the PR opens
-as a draft. Personal repos open as ready for review.
-
-Parse `PR_URL=…` and `PR_NUMBER=…` from stdout.
-
-## Squad/tribe labels (hellofresh work repos)
-
-Always add these labels on every work-repo PR:
-
-```
-gh pr edit <PR_NUMBER> --repo <org>/<repo> \
-    --add-label "squad: production" --add-label "tribe: production-planning"
-```
-
-Check the labels exist first (`gh label list --repo <org>/<repo>`) —
-label text sometimes differs slightly (spacing, renames). If either
-label is missing in that repo, create it before adding it to the PR:
-
-```
-gh label create "squad: production" --repo <org>/<repo> --color "5319E7"
-gh label create "tribe: production-planning" --repo <org>/<repo> --color "EBA726"
-```
-
-## Respond to the user
-
-One or two lines: PR URL, done.
+Verify the returned PR belongs to the intended repository, branch and base.
+Report its clickable URL and whether it is a draft. If publication is blocked,
+say what exists locally/remotely and what did not succeed.

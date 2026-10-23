@@ -1,6 +1,9 @@
 ---
 name: issue-decompose
-description: Decompose a GitHub issue into atomic, agy-runnable task prompt files using a Gemini subagent with deep reasoning. Honors a verbatim `## agy-tasks` spec in the issue body (transcribes 1:1 instead of re-deriving). Usage: issue-decompose <owner/repo> <issue-number>
+description: >-
+  Decompose a GitHub issue into atomic, agy-runnable task prompt files using a
+  Gemini subagent with deep reasoning. Honors a verbatim agy-tasks spec in the issue body.
+  Usage: issue-decompose <owner/repo> <issue-number>
 ---
 
 Decompose a GitHub issue into small, atomic implementation tasks that can each be run
@@ -55,8 +58,8 @@ If neither marker is present, proceed in normal (re-derivation) mode below.
 **Relevant files:** Infer which 3–5 source files the issue will touch. Read them.
 
 **Decompose** (normal mode only — skip if you handled a verbatim spec above) into N tasks (usually 1–5) where each task:
-- Touches ≤ 3 files, ships as exactly 1 commit
-- Has ≤ 5 acceptance criteria verifiable without Playwright/e2e
+- Has one coherent responsibility, with file boundaries derived from the code
+- Has concrete acceptance criteria and the relevant repository verification
 - Has an explicit `blockedBy: ["task-NN"]` list if it must come after another task
 - Is self-contained enough for an autonomous agent to implement without questions
 
@@ -80,9 +83,9 @@ Working dir: <abs repo path>
 <paste standing rules here verbatim>
 
 ## Absolute rules (non-negotiable)
-- Do NOT modify package.json / package-lock.json / yarn.lock
-- Make autonomous judgment calls; do NOT pause or ask for input at any point
-- Do NOT run Playwright/e2e — only: build + unit tests
+- Change dependency manifests only when the task requires it; update matching lockfiles
+- Make routine implementation decisions, but stop for unresolved scope or destructive actions
+- Run the repository's relevant verification, including end-to-end tests when required
 - Do NOT open a PR — implement, test, fix errors, then stop
 ```
 

@@ -49,13 +49,14 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 |---|---|
 | `bash/` | Bash profile snippets |
 | `brew-packages.txt` | Everything Homebrew installs |
-| `claude/skills/` | User-level Claude Code skills (whole-dir symlinked into `~/.claude/skills/`). Jarvis-managed skills (`jarvis-suggest`, `jarvis-continue-in-phone`, `slack-catchup`) are the exception — `hf-ktx` lives in the work repo `hf-workbench` and is symlinked only in `work` mode |
+| `agents/communication.md` | Shared plain-language and local-explanation preferences |
+| `claude/skills/` | Personal skills, linked into Claude and the Gemini personal-skills plugin. Company-specific skills live in the private work-context repo. Jarvis-managed skill directories retain their own installation |
 | `claude/hooks/` | Claude Code PostToolUse hooks (e.g. `jarvis-register.sh` auto-subscribes PRs/Jira Claude creates) |
 | `claude/settings-hooks.json` | Merged into `~/.claude/settings.json` — only replaces `hooks.PostToolUse`, preserves everything else |
 | `git/` | gitconfig templates (one personal, one work, one default with conditional includes) |
 | `gitconfig/` | Scoped git identity templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap. Real emails live in `emails.local.env` (gitignored — never commit them) |
 | `kitty/` | Terminal config |
-| `scripts/` | Helper scripts used by the bootstrap / `jarvis update` (e.g. `merge-claude-hooks.py`) |
+| `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
@@ -114,12 +115,116 @@ In nvim, `<leader>mb` in a markdown buffer starts mdserve on the current file's 
 
 [`rtk`](https://www.rtk-ai.app/) filters/summarizes noisy command output (git, gh, docker, test runners, ...) before it reaches the LLM. It's wired into both harnesses:
 
-- **Claude Code**: a `PreToolUse` hook on `Bash` (`rtk hook claude`) merged into `~/.claude/settings.json`, plus the repo-owned instructions file `claude/RTK.md` (linked to `~/.claude/RTK.md`) referenced by absolute path from the shared AGENTS.md.
+- **Claude Code**: a `PreToolUse` hook on `Bash` (`rtk hook claude`) merged into `~/.claude/settings.json`, plus `claude/RTK.md` composed into the generated Claude instructions.
 - **opencode**: a generated plugin at `~/.config/opencode/plugins/rtk.ts`.
 
 Bootstrap runs `rtk init -g --hook-only --auto-patch` (hook only — never touches CLAUDE.md or RTK.md) and `rtk init -g --opencode --auto-patch` (plugin only). Both are idempotent and non-interactive, so `setup-dev-env.sh` re-runs them every time (after installing `rtk` from `brew-packages.txt`).
 
-Do NOT run plain `rtk init -g --auto-patch` against your real HOME: it looks for a literal relative `@RTK.md` line and would append one through the `~/.claude/CLAUDE.md` symlink chain into the tracked repo file. For the same reason `rtk init -g --show` reports CLAUDE.md as "rtk not configured" — expected; the include is managed by this repo. If a new rtk version changes the RTK.md format, regenerate it in a scratch HOME (`HOME=$(mktemp -d) rtk init -g --auto-patch`) and copy the result into `claude/RTK.md`. To check savings: `rtk gain`.
+Do NOT run plain `rtk init -g --auto-patch` against your real HOME: it expects
+an `@RTK.md` import and would modify the generated instructions. RTK guidance is
+flattened into Claude/OpenCode only, not Gemini or Copilot. If a new version changes
+its guidance, regenerate in a scratch HOME, update `claude/RTK.md`, then rerun the
+instruction composer. To check savings: `rtk gain`.
+
+## Shared assistant guidance
+
+`opencode/AGENTS.md` holds generic working rules; `agents/communication.md` owns
+the communication style. Substantial explanations connect context, behavior,
+examples and consequences. Routine answers stay short. Deep reviews include
+**How this works** and **Why this matters** for every finding, separately from
+the short pasteable review comment.
+
+Refresh the installed instructions after changing these sources:
+
+```bash
+python3 scripts/install-agent-instructions.py
+```
+
+The composer writes private, mode-600 local files under
+`~/.config/agent-context/` and links all four instruction surfaces to them:
+Claude, OpenCode, Gemini and Copilot. It flattens optional
+`~/.hf-context/AGENTS.md` rather than assuming every harness supports imports.
+No combined private content is written into this repository. Existing global
+files/links are preserved as `.before-agent-context` backups. `--dry-run`
+previews; `--home <directory>` supports isolated checks.
+
+Company-specific AWS, Jira, Snowflake and incident workflows are installed by
+the private work-context repository, not copied back here. In work setup mode,
+bootstrap invokes that repo's link installer before composition, after the
+Gemini plugin directory exists. Either installation order is supported.
+
+### Local HTML explanations
+
+For substantial reviews or explanations, save one offline page per repo/topic
+and open it once. The user can override this with "brief", "text only" or
+"don't open". Tiny re-review deltas need no new browser tab.
+
+Write plain-text content as JSON in a local scratch directory, then:
+
+```bash
+python3 scripts/agent-explainer.py \
+  --repo /path/to/repo --topic data-flow --input /path/to/explanation.json
+```
+
+```json
+{
+  "title": "How the update works",
+  "summary": "Validate first, then save the accepted change.",
+  "sections": [
+    {
+      "heading": "The flow",
+      "flow": ["Input", "Validation", "Storage", "Response"],
+      "paragraphs": ["Invalid input stops before storage changes."]
+    },
+    {
+      "heading": "Why this matters",
+      "steps": ["An invalid identifier is rejected.", "The existing record stays unchanged."],
+      "code": "validate(input)\nsave(input)"
+    }
+  ],
+  "metadata": {"Revision": "example-sha"},
+  "sources": [{"label": "Source", "url": "https://example.org/source"}]
+}
+```
+
+Pages live at `~/.local/share/agent-explainers/<repo-key>/<topic>.html`, outside
+Git; worktrees share their repository identity. Reusing a topic updates the page.
+The renderer escapes input and uses inline SVG/CSS with no scripts, fonts or
+other network resources. Sources are clickable HTTPS links, not fetched content.
+Use synthetic examples, not credentials or unnecessary production data.
+`--no-open` saves without launching a browser. A failed open reports the saved
+path, not a false success.
+
+### Review boundaries and portability
+
+- CI observation is read-only. The watcher distinguishes pending, failed,
+  cancelled, empty/unknown and passed checks, bounds API-error retries and
+  records new discussion without posting. Explicit end-to-end workflows may
+  separately authorize CI repair and publication.
+- Driver prompts preserve task dependencies and stop on failed verification.
+  They do not discard unexpected files or amend/force-push by default.
+  Work merges remain human actions.
+- Synced third-party skills were reviewed but not rewritten. The `learn` skill's
+  diagnostic-question defaults can conflict with direct explanations: request
+  tutoring explicitly rather than applying it to ordinary code explanations.
+  Docs/import-memory connectors, hosted-browser assumptions in morning briefs,
+  and preinstalled office tooling are environment requirements, not universally
+  available capabilities.
+- The managed desloppify body is unchanged. A scan does not authorize its
+  broader commit/push or upstream-publication suggestions; shared scope rules
+  apply.
+- OpenCode 2.1.2's installed API schema uses `permissions` rule lists with
+  `action`/`resource`/`effect`, unlike older `permission.bash` examples. Agent
+  source headers match that schema. Agent activation is not established merely
+  by matching it: the installed `/api/agent` endpoint returned an empty list
+  even for an isolated valid inline-config fixture. Do not assume the custom
+  agents are active or broaden permissions to work around that limitation.
+
+Focused checks:
+
+```bash
+python3 -m unittest discover -s scripts/tests -p 'test_agent_guidance.py'
+```
 
 ## Common operations
 

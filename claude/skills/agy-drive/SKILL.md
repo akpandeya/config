@@ -1,13 +1,19 @@
 ---
 name: agy-drive
-description: Drive a decomposed GitHub issue or epic to completion using agy — one PR per task, each closing its own issue, reviewed by Opus/Sonnet/agy before merge. Usage: /agy-drive <owner/repo> <issue-number> [--reviewer=opus|sonnet|agy] [--retry-failed]
+description: >-
+  Drive a decomposed GitHub issue or epic using agy, with one PR per task,
+  independent review and scope-aware merge policy.
+  Usage: /agy-drive <owner/repo> <issue-number> [--reviewer=opus|sonnet|agy] [--retry-failed]
 allowed-tools: Bash, Read, Write, Agent
 argument-hint: "<owner/repo> <issue-number> [--reviewer=opus|sonnet|agy] [--retry-failed]"
 ---
 
 Orchestrate autonomous implementation of a GitHub issue — or a whole epic — using
 `agy`. Each task from the decomposed manifest runs as a separate `agy` invocation,
-gets its own PR, and is reviewed and merged before the next task starts.
+gets its own PR, and is reviewed before the next dependent task starts.
+Publishing is part of this explicitly invoked end-to-end workflow; work-repo
+merges still belong to a human. A plan-only invocation stops before execution.
+Use the shared communication style for reports, without an HTML page per status.
 
 Nothing here is repo-specific. Build commands, scope fences, lockfile policy and
 pacing all come from the manifest, with defaults that reproduce the original
@@ -82,8 +88,7 @@ Who should review each PR before merging?
   substance, and blocks the merge on a violation (~8 min per PR). Use for engine,
   schema and contract work.
 - **Sonnet** — thorough, good for ordinary feature changes (~2 min per PR)
-- **agy** — a second autonomous agy pass that checks acceptance criteria and fixes
-  issues (~3–5 min per PR)
+- **agy** — a separate read-only pass over the acceptance criteria
 
 ## Drive the task loop
 
@@ -98,14 +103,17 @@ is what the main loop is for.
 **Cost control:** `tee` agy's output to `$PROMPT_DIR/logs/<task.id>.agy.log` and
 read only `tail -60` of it. The loop is mostly *waiting*, not tokens.
 
-**Two structural guarantees, established before any task runs:**
+**Two coordination guards, established before any task runs:**
 
-1. **The lock.** `mkdir` is atomic, so this cannot race:
+1. **The lock.** Acquire one persistent directory for the whole invocation:
    ```bash
    mkdir "$PROMPT_DIR/.lock" || { echo "DRIVER_BUSY"; exit 9; }
-   trap 'rmdir "$PROMPT_DIR/.lock" 2>/dev/null' EXIT
    ```
-   Exit code 9 means another driver is live — **abort this invocation entirely**.
+   Exit code 9 means another driver may own it: abort rather than deleting it.
+   Record the session identity in it. Release only your own lock on completion
+   or a clean halt. Do not attach an EXIT trap to a short-lived Bash call: that
+   releases the lock before the next call. After a crash, inspect ownership and
+   ask before removing a stale lock.
 2. **Cool-down at the front, not the back.** A trailing sleep is skippable at zero
    cost. Fused to the head of the next task's work it is not — see step (a).
 
@@ -115,20 +123,24 @@ task N+1's commands before task N reaches `merged`.
 ### Preflight (once per invocation)
 
 - `git -C $REPO_PATH status --porcelain` is empty (else stop and report).
-- `git -C $REPO_PATH checkout main && git pull --ff-only`.
+- Resolve the actual default/base branch and required work ticket first.
+  Use the repository's required branch prefix and real ticket key.
+- Check out that base and update with `git pull --ff-only` only within the
+  authorized workspace; do not overwrite another session's branch or dirty files.
 - `gh auth status` succeeds.
 - Every file the task prompts tell agy to read exists (e.g. a design doc).
   A missing shared spec is a hard abort, not a warning.
-- Run `VERIFY` on clean `main` and confirm green, so any later failure is
+- Run `VERIFY` on the clean resolved base and confirm green, so any later failure is
   unambiguously attributable to agy.
 
 Then work through tasks in dependency order (respect `blockedBy`), skipping
 `merged` and `skipped`. A `failed` task is **not** retried unless `--retry-failed`
 was passed; without it, stop and report.
 
-### a. Cool-down + sync main
+### a. Cool-down + sync base
 
-One bash call, **sandbox disabled**, cool-down fused to the front:
+One tracked Bash call, cool-down fused to the front. Use only permissions
+available in the current harness; do not bypass its execution policy.
 
 ```bash
 COOL=$(( COOLDOWN - ( $(date +%s) - PREV_FINISHED_AT ) ))   # 0 on the first task
@@ -137,7 +149,7 @@ if [ $COOL -gt 0 ]; then
   sleep $COOL
   echo "COOLDOWN END $(date +%s) ($(date))"
 fi
-cd <repoPath> && git checkout main && git pull --ff-only && git checkout -B <task.branch>
+cd <repoPath> && git checkout <base> && git pull --ff-only && git checkout -b <task.branch>
 ```
 
 The cool-down is a **minimum inter-task-start interval**, not a fixed tax: a task
@@ -150,13 +162,15 @@ launching agy.
 
 ### b. Run agy
 
-Sandbox disabled; bash timeout 35 min (above agy's own 30, so agy's timeout fires
-first and its partial work survives):
+Use the harness's tracked background/wait mechanism and agy's own 30-minute
+timeout. Keep the command handle; an initial tool wait ending is not a process
+timeout and is not a reason to rerun the task.
 
 ```bash
 mkdir -p "$PROMPT_DIR/logs"
+set -o pipefail
 agy --dangerously-skip-permissions --print-timeout 30m \
-  -p "$(cat $PROMPT_DIR/<task.promptFile>)" 2>&1 \
+  -p "$(cat "$PROMPT_DIR/<task.promptFile>")" 2>&1 \
   | tee "$PROMPT_DIR/logs/<task.id>.agy.log"
 ```
 
@@ -174,19 +188,17 @@ Then read only `tail -60` of that log.
 
 ### d. Hygiene + scope check
 
-Remove `*.patch`, `dev_output.log`, stray `.py` scratch scripts, `.agy/`.
+Remove only explicitly identified scratch files created by this invocation.
+Never infer ownership from an extension, timestamp or generic filename.
 
-**Lockfile.** Unless `task.lockfileException` is true, restore dependency
-manifests from main:
-```bash
-git checkout main -- package.json package-lock.json 2>/dev/null || true
-```
-When `lockfileException` **is** true, leave them alone — the task creates a new
-workspace, and CI's `npm ci` fails if the lockfile doesn't list it.
+**Dependencies.** Respect the task's dependency policy. If an unexpected
+manifest/lockfile change appears, investigate and correct the implementation
+rather than silently restoring files. Required dependency changes keep the
+manifest and lockfile consistent; stop if that exceeds the approved scope.
 
 **Scope.** If `task.scope` is non-empty, assert every path in
-`git status --porcelain` matches one of its globs. Revert anything outside
-(`git checkout main -- <path>`, or `rm` if untracked) and note it in the PR body.
+`git status --porcelain` matches one of its globs. Stop on unexpected changes;
+do not discard them automatically or assume they belong to this invocation.
 
 ### e. Verify
 
@@ -202,38 +214,20 @@ produces garbage.
 
 ### f. Commit
 
-Sandbox disabled (SSH-agent signing fails inside it).
-
-```bash
-git add -- <explicit changed paths>     # never `git add -A`, never `git add -p`
-git commit -m "<conventional-commit title>
-
-Closes #<TASK_ISSUE(t)>
-<Part of #EPIC — only when EPIC is set and differs>
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-```
-
-`git add -p` is interactive and cannot work unattended — always use explicit paths.
-
-If the commit fails with `agent refused operation` or `gpg failed to sign`, retry
-once as `git -c commit.gpgsign=false commit --no-gpg-sign -m "..."`.
+Use the git-commit skill with explicit paths and actual harness/model attribution.
+Use `Part of` for an umbrella epic, and `Closes` only for the task's own issue.
+Do not claim another model authored a commit.
 
 ### g. Push + PR
 
-```bash
-git push -u origin <task.branch>
-gh pr create --base main --head <task.branch> \
-  --title "<task.title>" \
-  --body "..."
-```
+Use the pr-create skill and the current harness's supported PR-creation tool,
+with the resolved base, task branch and repository draft policy.
 
-Body: summary bullets from the acceptance criteria, a Test plan with one line per
-`VERIFY` command, any out-of-scope reverts from step (d), then
+Body: concise summary bullets from the acceptance criteria, then
 `Closes #<TASK_ISSUE(t)>` and `Part of #<EPIC>`.
 
-If the push fails with `Permission denied (publickey)`, run `gh auth setup-git`
-and set the remote to its HTTPS URL, then retry.
+If authentication fails, report the blocker. Do not silently change the remote
+URL, account or Git credential configuration.
 
 Record `task.pr` and set `status: "pr_open"`, then **write the manifest
 immediately** — this is the most important persistence point for resumability.
@@ -244,7 +238,7 @@ immediately** — this is the most important persistence point for resumability.
 branch checked out. It must check, in this order:
 
 1. **Frozen-contract compliance**, if the task prompt names frozen files. Diff them
-   against main; any rename, retype, removal or narrowed optionality is
+   against the pinned task base; any rename, retype, removal or narrowed optionality is
    **blocking**. Additive-only is the bar. This is the check a cheaper reviewer
    waves through, so it goes first.
 2. **Purity**, if the task prompt requires it — grep for the forbidden constructs
@@ -256,16 +250,16 @@ branch checked out. It must check, in this order:
    met / not-met / partial, **citing the file and line** that satisfies it.
    "Looks fine" is not acceptable.
 5. **Conventions** — conformance to whatever template the task prompt points at.
-6. **Scope** — `git diff --name-only main...<branch>` entirely within `task.scope`;
-   lockfile touched only if `lockfileException`.
+6. **Scope** — `git diff --name-only <task-base>...<branch>` within `task.scope`;
+   dependency edits consistent with the approved task and verification.
 7. **Test substance** — no `.skip`/`.only`, no assertion-free tests, no snapshot
    added to paper over a failure, no loosened existing assertions. Diffs to
    pre-existing test files get extra scrutiny.
 8. **Re-run `VERIFY` itself** and confirm exit 0.
 
-It **may**: fix failing tests and type errors, add missing tests for implemented
-criteria, tighten types, delete scratch files, revert out-of-scope edits, then
-`git add && git commit --amend --no-edit && git push --force-with-lease`.
+It is read-only: report verified findings and evidence. Send approved fixes back
+to the implementer, verify them and create a new explicit-path commit. Do not
+amend or force-push merely because a reviewer found an issue.
 
 It **may not**: change a frozen schema (even to improve it), add dependencies,
 edit outside `task.scope`, or redesign the approach.
@@ -275,45 +269,42 @@ task `failed` and halt — do not merge.
 
 **reviewer = sonnet** — spawn a Sonnet Agent (`model: sonnet`):
 "Review the open PR on branch `<task.branch>` in `<repoPath>`. Read
-`git diff main...<task.branch>`. Check each acceptance criterion in
-`$PROMPT_DIR/<task.promptFile>`. Run: `<VERIFY commands>`. Fix any issues in the
-working tree, then `git add && git commit --amend --no-edit && git push
---force-with-lease`. Report what you fixed."
+`git diff <task-base>...<task.branch>`. Check each acceptance criterion in
+`$PROMPT_DIR/<task.promptFile>`. Run: `<VERIFY commands>`. Report verified issues without editing, staging, committing or pushing.
+The implementer handles fixes in a new commit."
 
 **reviewer = agy**:
 ```bash
 agy --dangerously-skip-permissions --print-timeout 15m -p "
 Review the changes on git branch <task.branch> in <repoPath>.
-Read: git diff main...<task.branch>
+Read: git diff <task-base>...<task.branch>
 Check every acceptance criterion in $PROMPT_DIR/<task.promptFile>.
 Run, in order, stopping at the first failure: <VERIFY commands>
-Fix any issues. If you made fixes: git add <files> && git commit --amend --no-edit && git push --force-with-lease.
-Report what you found and fixed. Then stop.
+Do not edit or publish. Report verified findings and evidence, then stop.
 "
 ```
 
 ### i. Wait for CI + merge
 
-Poll every 30 s, up to 40 times (20 min) — a real CI run doing a clean install
-plus a full build and test suite will not be `CLEAN` inside the old 150 s budget.
+Use the read-only pr-watch helper for the exact repository/PR, with a bounded
+wait (for example, `--interval 30 --max-ticks 40`). A branch's mergeability
+status alone does not prove checks passed.
 
-```bash
-for i in $(seq 1 40); do
-  gh pr view <task.pr> --json mergeStateStatus,statusCheckRollup
-  # CLEAN -> merge
-  sleep 30
-done
-```
-
-- `CLEAN` → `gh pr merge <task.pr> --squash --delete-branch`
-- failing checks → invoke the `ci-fix` skill once, then resume polling
-- `DIRTY` (conflict) → `git checkout <branch> && git rebase origin/main`, re-run
-  `VERIFY`, force-push, resume polling; a second conflict → `failed`, halt
+- Confirmed passing checks and satisfied review/branch requirements → use the
+  scope-aware pr-merge skill. For work repositories, leave
+  the PR awaiting human merge and stop dependent work. Record `merged` only
+  after GitHub confirms it.
+- failing checks → this explicitly requested driver separately authorizes one
+  scoped ci-fix commit/push, then resume observation
+- `DIRTY` (conflict) → report the divergence and request an approved recovery.
+  Do not automatically rebase, amend or force-push.
 - timeout → `failed`, halt. **Never merge unverified.**
 
 ### j. Settle
 
-Set `status: "merged"`, write `finishedAt`, keep `pr`. In an epic-style manifest
+Only after GitHub confirms the merge, set `status: "merged"`, write `finishedAt`
+and keep `pr`. A work PR awaiting human merge keeps `status: "pr_open"` and the
+driver stops rather than settling it. In an epic-style manifest
 with per-task issues, confirm the issue actually closed
 (`gh issue view <TASK_ISSUE(t)> --json state`); if the `Closes` trailer didn't fire,
 close it explicitly with a comment linking the PR. Skip this check for an epic without
@@ -329,11 +320,11 @@ continuing. Gates belong after any task whose output every later task depends on
 | failure | detection | action |
 |---|---|---|
 | agy no-op | empty `diff --stat` ×2 | `failed`, halt |
-| agy timeout | bash `timeout` at 35 min | keep partial work, go to (e); if verify fails → `failed`, halt |
+| agy timeout | worker's own timeout or tracked process result | keep partial work, verify acceptance and tests; otherwise fail |
 | verify red | non-zero `VERIFY` command | Sonnet fixer ×2 → else `failed`, halt |
-| out-of-scope files | `status --porcelain` vs `task.scope` | revert those paths, continue, note in PR |
+| out-of-scope files | `status --porcelain` vs `task.scope` | preserve files, halt and resolve ownership/scope |
 | CI red | `statusCheckRollup` FAILURE | `ci-fix` ×1 → else `failed`, halt |
-| merge conflict | `mergeStateStatus: DIRTY` | rebase + reverify + force-push ×1 → else `failed`, halt |
+| merge conflict | `mergeStateStatus: DIRTY` | halt and request an approved recovery |
 | reviewer BLOCK | `VERDICT: BLOCK` | `failed`, halt |
 | **usage limit** | output matches `usage limit\|rate limit\|resets at\|429` | **not a failure** — parse the reset time, sleep until it + 120 s, do **not** increment `attempts`, retry the same task |
 | lock held | `mkdir` fails, exit 9 | abort this invocation; another driver is live |
@@ -369,14 +360,14 @@ Worst-case loss from a crash is one agy run.
 Runs only after every task is `merged` (never after a halt).
 
 1. If `FINAL_REVIEWER` is set, spawn one agent of that type (`opus` → `model: opus`,
-   `sonnet` → `model: sonnet`), cwd `$REPO_PATH`, on clean `main` after the last merge.
+   `sonnet` → `model: sonnet`), cwd `$REPO_PATH`, on the clean resolved base after the last merge.
    It reviews the epic as a whole: `git log --oneline` for the epic's merged PRs, and
-   `git diff <first-task-base>...main`. It checks cross-task consistency (duplicate
+   `git diff <first-task-base>...<final-base>`. It checks cross-task consistency (duplicate
    helpers, conflicting prefs keys, strings or permissions added twice, a gate's
    contract changed later), the epic's acceptance and design decisions in the epic
-   body, and that `VERIFY` passes on `main`. It ends `VERDICT: APPROVE` or
-   `VERDICT: BLOCK <reason>`. It may open a fix PR for small issues in the same way as
-   a task; it may not reopen merged scope.
+   body, and that `VERIFY` passes on that base. It ends `VERDICT: APPROVE` or
+   `VERDICT: BLOCK <reason>`. It reports read-only findings; send a necessary,
+   authorized fix back through the implementation workflow.
 2. On `APPROVE` (or with no `FINAL_REVIEWER`), and only if the epic has no per-task
    issues: `gh issue close <EPIC> --comment "Done: <PR list>"`.
 3. On `BLOCK`: leave the epic open, report the reason, stop.
