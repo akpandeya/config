@@ -375,7 +375,7 @@ a{{color:var(--link)}}
 .comment-head{{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:var(--box-bg);font-size:.8rem;color:var(--muted)}}
 .copy{{border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--btn-fg);border-radius:6px;padding:2px 12px;font-size:.8rem;cursor:pointer}}
 .copy:hover{{border-color:var(--accent);color:var(--accent)}}
-.comment pre{{border-radius:0;margin:0}}
+.comment pre{{border-radius:0;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}}
 @media(max-width:600px){{main{{padding:20px 16px}}h1{{font-size:1.6rem}}}}
 @media print{{:root{{color-scheme:light;--bg:#f8fafc;--fg:#172033;--muted:#475569;--border:#cbd5e1;--pre-bg:#e2e8f0;--accent:#2563eb;--link:#1d4ed8;--box-bg:#eff6ff;--box-border:#93c5fd;--btn-bg:#ffffff;--btn-border:#94a3b8;--btn-fg:#172033}}.severity-blocker{{color:#b91c1c;border-color:#fca5a5;background:#fef2f2}}.severity-should-fix{{color:#b45309;border-color:#fcd34d;background:#fffbeb}}.severity-nit{{color:#475569;border-color:#cbd5e1;background:#f1f5f9}}.severity-question{{color:#6d28d9;border-color:#c4b5fd;background:#f5f3ff}}body{{background:white}}main{{padding:0}}pre{{white-space:pre-wrap}}.copy{{display:none}}}}
 </style></head><body><main><h1>{title}</h1><p class="meta">{meta}</p>
