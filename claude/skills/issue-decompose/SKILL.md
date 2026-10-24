@@ -137,5 +137,6 @@ and dependency order. Then stop.
 ## After the Opus agent returns
 
 Read `$PROMPT_DIR/manifest.json` and show the user the decomposed task list.
-Tell them to run `/agy-drive $REPO $ISSUE_NUM` or `/jules-drive $REPO $ISSUE_NUM`
-to execute it, with optional `--reviewer=sonnet|agy`.
+Tell them to run `/agy-drive $REPO $ISSUE_NUM` (agy implements) or
+`/sonnet-drive $REPO $ISSUE_NUM` (a Sonnet subagent implements, inside Claude Code)
+to execute it.
