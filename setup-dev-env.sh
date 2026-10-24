@@ -372,7 +372,7 @@ for skill_dir in "$REPO_DIR"/claude/skills/*/; do
     [ -f "$skill_dir/SKILL.md" ] || continue
     skill="$(basename "$skill_dir")"
     case "$skill" in
-        jarvis-suggest|jarvis-continue-in-phone|slack-catchup|issue-decompose|agy-drive) continue ;;
+        jarvis-suggest|jarvis-continue-in-phone|slack-catchup|issue-decompose|agy-drive|sonnet-drive) continue ;;
     esac
     link_config "$skill_dir" \
                 "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
