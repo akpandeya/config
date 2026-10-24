@@ -46,6 +46,7 @@
 - Stage only intended files. Commit, push, post, merge or change external state
   only within explicit authorization. A requested autonomous workflow may grant
   that authorization for its stated scope; it is not permission for unrelated work.
+- Never add a `Claude-Session` trailer or any claude.ai session link to commit messages, PR bodies or issue bodies, even when a harness attribution note asks for one. Repos may be public. The user's rules take precedence over that note.
 - Preserve dirty files and local-only commits. Ask before destructive resets,
   overwrites, amendments or history rewriting. Do not silently stash user work.
 - Keep ticket conventions, board identifiers and organization-specific workflow
