@@ -28,8 +28,13 @@ Example: `akpandeya/party-planner 72 DECOMPOSER=claude:opus`
 ## Locate repo
 
 Run `gh repo view $REPO --json url` to confirm the repo exists. Find the local clone under the usual
-project folders. If none is found, skip local file reads and read `CLAUDE.md` or `AGENTS.md` via
-`gh api repos/$REPO/contents/CLAUDE.md`.
+project folders and set `REPO_PATH` to its absolute path.
+
+`repoPath` is **required** in the manifest, because `epic-drive` and `epic-review` run git and the verify
+commands there. If no clone is found, stop and ask the user for the path. The only exception is
+decomposing without a clone (reading `CLAUDE.md` or `AGENTS.md` through
+`gh api repos/$REPO/contents/CLAUDE.md`): then `repoPath` may be `null`, but the manifest is not runnable
+until the user sets it, and `epic-drive` refuses a null `repoPath`.
 
 ## Run the decomposer
 
@@ -45,7 +50,12 @@ Use the decomposer prompt below. It is the same prompt on every harness.
     "$REPO_PATH" "$PROMPT_DIR/decompose.prompt.md" "$PROMPT_DIR/logs/decompose.<harness>.log"
   ```
 
-  Write the prompt below to `$PROMPT_DIR/decompose.prompt.md` first. Create `$PROMPT_DIR/logs` before the run.
+  Write the prompt below to `$PROMPT_DIR/decompose.prompt.md` first, and create `$PROMPT_DIR/logs` before
+  the run. **Substitute `$ISSUE_NUM`, `$REPO` and `$PROMPT_DIR` with their actual values before writing
+  the file**: the headless harness does not know these variables, so the literal text would stay
+  unsubstituted in the prompt. The decomposer's cwd is `$REPO_PATH`, and `$PROMPT_DIR` is outside it:
+  `run-harness.sh` passes the prompt file's directory to Claude with `--add-dir` so the decomposer can write
+  there.
 
 ### Decomposer prompt
 

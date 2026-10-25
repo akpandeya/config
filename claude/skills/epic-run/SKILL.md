@@ -9,7 +9,7 @@ allowed-tools: Bash, Read, Write, Agent, AskUserQuestion, Skill
 argument-hint: "[<owner/repo> <issue-number>] [--retry-failed]"
 ---
 
-One entry point for the whole pipeline. It asks three questions (who decomposes, who implements,
+One entry point for the whole pipeline. It asks three role questions and one pacing question (who decomposes, who implements,
 who reviews the epic), then runs the three components in order. Each component can still be run on
 its own: `issue-decompose`, `epic-drive` and `epic-review`.
 
@@ -29,8 +29,10 @@ time. If the script is missing, say so and stop: the install step has not run.
 
 ## 2. Pick harnesses
 
-Ask the three role questions in one `AskUserQuestion` call. Options are the three harnesses, each
-with a short description:
+Ask the three role questions and the cool-down question in one `AskUserQuestion` call (four questions).
+If the tool allows fewer than four questions per call, ask the cool-down question in a separate call.
+
+For the three role questions, the options are the three harnesses, each with a short description:
 
 - **Claude Code**: Claude models through `claude`
 - **OpenCode**: models from the local `opencode` config
@@ -40,7 +42,18 @@ Roles, with their header labels:
 
 - `Decomposer`: writes the task prompts. Opus-class reasoning helps most here.
 - `Implementer`: writes the code for each task, one PR per task.
-- `Reviewer`: reviews the whole epic after its last merge. Read-only.
+- `Reviewer`: reviews the whole epic after its last merge and fixes what it finds, in rounds until a round changes nothing.
+
+The fourth question, header `Cool-down`: "Cool-down between tasks?" Options:
+
+- **Use manifest value**: use `cooldownSeconds` from the manifest. Offer it first only when a manifest
+  exists and sets `cooldownSeconds`; otherwise leave it out.
+- **0 seconds**: no pause
+- **540 seconds**: default, rate-limit friendly
+- **900 seconds**
+
+The answer is passed to `epic-drive` as `COOLDOWN=<seconds>` (or `COOLDOWN=manifest`). Nothing assumes a
+default silently.
 
 ## 3. Pick models
 
@@ -54,7 +67,7 @@ only source.
 
 ## 4. Confirm
 
-Print a three-row table: role, harness, model. Then continue without asking again, unless step 5 needs a
+Print a three-row table: role, harness, model, and a line below it with the chosen cool-down in seconds. Then continue without asking again, unless step 5 needs a
 confirmation.
 
 Notes:
@@ -71,10 +84,11 @@ run-all form in `epic-drive`.
 1. **Decompose.** If `$PROMPT_DIR/manifest.json` already exists, do not decompose again. Show its task list
    and ask whether to keep it or re-decompose. Re-decomposing a partly-run epic is refused while any task
    is `pr_open`, `merged` or `running`. Otherwise run the `issue-decompose` skill with `DECOMPOSER=<harness>:<model>`.
-2. **Drive.** Run the `epic-drive` skill with `IMPLEMENTER=<harness>:<model>` and any `--retry-failed`.
+2. **Drive.** Run the `epic-drive` skill with `IMPLEMENTER=<harness>:<model>`, `COOLDOWN=<seconds>` and any `--retry-failed`.
    It stops at a halt and resumes on re-run, so a halt here is the normal stop point.
-3. **Review.** When `epic-drive` reports every task merged, run the `epic-review` skill with
-   `REVIEWER=<harness>:<model>`.
+3. **Review.** `epic-drive` runs the `epic-review` skill itself as its final step, with
+   `REVIEWER=<harness>:<model>`. Pass the reviewer to `epic-drive` so it can do that. If `epic-drive` reports
+   every task merged without having reviewed, run `epic-review` here.
 
 Stop at any halt and print the resume command for the component that stopped. Do not run a later step
 after an earlier one halted.

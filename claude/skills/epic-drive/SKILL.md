@@ -4,9 +4,9 @@ description: >-
   Drive a decomposed GitHub issue or epic to completion with one PR per task, verify
   and CI gates, and one epic review after its last merge. The implementer harness and
   model are chosen by the caller.
-  Usage: /epic-drive <owner/repo> <issue-number> IMPLEMENTER=<harness>:<model> [--retry-failed]
+  Usage: /epic-drive <owner/repo> <issue-number> IMPLEMENTER=<harness>:<model> [COOLDOWN=<seconds>] [REVIEWER=<harness>:<model>] [--retry-failed]
 allowed-tools: Bash, Read, Write, Agent
-argument-hint: "<owner/repo> <issue-number> IMPLEMENTER=<harness>:<model> [--retry-failed]"
+argument-hint: "<owner/repo> <issue-number> IMPLEMENTER=<harness>:<model> [COOLDOWN=<seconds>|manifest] [REVIEWER=<harness>:<model>] [--retry-failed]"
 ---
 
 Orchestrate autonomous implementation of a decomposed GitHub issue or epic. Each task
@@ -24,10 +24,16 @@ not set them.
 
 ## Inputs
 
-`$ARGUMENTS`: `<owner/repo> <issue-number> IMPLEMENTER=<harness>:<model> [--retry-failed]`
+`$ARGUMENTS`: `<owner/repo> <issue-number> IMPLEMENTER=<harness>:<model> [COOLDOWN=<seconds>|manifest] [REVIEWER=<harness>:<model>] [--retry-failed]`
 
 - `IMPLEMENTER` is one of `claude:<alias or id>`, `opencode:<provider/model>` or
   `agy:<model id>`. When called from `epic-run`, it is already resolved; do not ask again.
+- `REVIEWER` is passed through to `epic-review` in the Final review step.
+- `COOLDOWN` is the minimum interval between task starts, in seconds. `epic-run` asks for it up front and
+  passes `COOLDOWN=<seconds>`, or `COOLDOWN=manifest` to use `manifest.cooldownSeconds`. There is no silent
+  default: if it is absent when this skill is run on its own, ask once (0, 540 or 900 seconds, or use the
+  manifest value when `cooldownSeconds` is set). `cooldownSeconds` in the manifest is used only when the
+  caller chose "use manifest value".
 - `SLUG` = owner + "-" + repo-name + "-issue-" + issue-number.
 - `PROMPT_DIR` = `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/$SLUG`. The same directory
   is used by every harness, so a manifest written by one harness can be driven by another.
@@ -71,10 +77,10 @@ manifests in the run.
 | `REPO_PATH` | `manifest.repoPath` | required |
 | `EPIC` | `manifest.epic` | `manifest.issue` when the manifest has no per-task issues, else `null` |
 | `VERIFY` | `manifest.verifyCommands` → repo `CLAUDE.md` "Full verification" / "Build & Test" → `["npm run build", "npm test"]` only if `package.json` exists | required (see below) |
-| `COOLDOWN` | `manifest.cooldownSeconds` | `540` |
+| `COOLDOWN` | argument `COOLDOWN=<seconds>`; `manifest.cooldownSeconds` only for `COOLDOWN=manifest` | required, asked by `epic-run` (see Inputs) |
 | `GATES` | `manifest.gateAfter` | `[]` |
 | `IMPLEMENTER` | argument | required |
-| `REVIEWER` | `manifest.reviewer` → `manifest.finalReviewer` | handled by `epic-review` |
+| `REVIEWER` | argument from `epic-run`, else `manifest.reviewer` → `manifest.finalReviewer` | passed to `epic-review` (see Final review) |
 
 **Inferred values need confirmation.** If `VERIFY` or `EPIC` came from detection rather than
 the manifest, do not start the loop. Print the resolved config and ask the user to confirm, or
@@ -139,8 +145,9 @@ may start before task N reaches `merged`.
   abort, not a warning.
 - Run `VERIFY` on the clean base and confirm green, so later failures are attributable to the
   implementer.
-- Record `EPIC_BASE_SHA` = `git rev-parse HEAD` on that clean base. `epic-review` diffs against it,
-  so write it to the manifest before the first task.
+- Record `EPIC_BASE_SHA` = `git rev-parse HEAD` on that clean base, and the base branch name. `epic-review`
+  diffs against them, so write them to the manifest as `epicBaseSha` and `baseBranch` before the first
+  task. On a resume, keep the existing `epicBaseSha`.
 
 Work through tasks in dependency order (respect `blockedBy`), skipping `merged` and `skipped`. A
 `failed` task is not retried unless `--retry-failed` was passed.
@@ -150,7 +157,7 @@ Work through tasks in dependency order (respect `blockedBy`), skipping `merged` 
 One tracked Bash call, cool-down fused to the front:
 
 ```bash
-# PREV_FINISHED_AT: epoch seconds of the most recent merged task's finishedAt in the manifest.
+# PREV_FINISHED_AT: epoch seconds of the previous task's finishedAt in the manifest (the only anchor).
 # No previous finish (first task) means no sleep.
 COOL=$(( COOLDOWN - ( $(date +%s) - PREV_FINISHED_AT ) ))   # 0 on the first task
 if [ $COOL -gt 0 ]; then
@@ -162,7 +169,7 @@ cd <repoPath> && git checkout <base> && git pull --ff-only && git checkout -b <t
 ```
 
 The cool-down is a minimum inter-task-start interval, not a fixed tax. A task that already took
-longer than `COOLDOWN` pays nothing. That bounds requests per hour, which is what usage limits
+longer than `COOLDOWN` pays nothing. The anchor is always one field: the previous task's `finishedAt`. That bounds requests per hour, which is what usage limits
 measure.
 
 Set `status: "running"`, increment `attempts`, write `startedAt` **before** launching the
@@ -175,12 +182,14 @@ Dispatch on `IMPLEMENTER`. The prompt is the same either way:
 - Working directory `<repoPath>`, already on `<task.branch>`.
 - Read `$PROMPT_DIR/<task.promptFile>` and implement it, including every acceptance criterion
   and the repository's `VERIFY` commands, run in order.
-- Do **not** run `git add`, `git commit`, `git push`, `gh pr create` or anything that changes
-  remote state. The driver owns publication. Leave changes in the working tree.
-- Stay inside `task.scope` if it is non-empty. Do not edit dependency manifests unless the task
-  requires it.
-- Do not ask questions. If something is unresolved or destructive, stop and say so in the summary.
-- End with a summary of at most 40 lines: files changed, verify results, anything not done.
+- The fixed **implementer preamble**, prepended to every implement prompt. Its text lives in one place,
+  `~/.config/agent-context/scripts/implement-preamble.md` (source: `claude/scripts/implement-preamble.md`).
+  It says: do not `git add`, `git commit`, `git push` or open PRs; stay inside `task.scope` if set; the final
+  reply is at most 40 lines; ask no questions; stop and say so if blocked. `run-harness.sh` prepends it
+  for the `implement` role only, into a temp file next to the log (`<log>.prompt`), and leaves the
+  original prompt file untouched. For a same-harness subagent, read that file and put its text at the top
+  of the subagent prompt yourself.
+- Do not edit dependency manifests unless the task requires it.
 
 **Same harness as this session:** spawn one subagent of the same harness with the model from
 `IMPLEMENTER`. In Claude Code that is `Agent` with `model:` and `subagent_type: general-purpose`.
@@ -193,9 +202,9 @@ mkdir -p "$PROMPT_DIR/logs"
   "$REPO_PATH" "$PROMPT_DIR/<task.promptFile>" "$PROMPT_DIR/logs/<task.id>.<harness>.log"
 ```
 
-Keep the command's handle. Read only `tail -60` of the log. As soon as the process exits, write
-`implementerExitedAt` (epoch seconds) to the task in the manifest. The next task's cool-down in step
-(a) is measured from it.
+Keep the command's handle. Read only `tail -60` of the log. Each run is bounded by `TIMEOUT` (default
+30m; set the env var to change it) and a timeout exits non-zero. Exit code 3 means the log shows a
+permission denial, so the run did not really succeed: treat it as an incomplete implementer.
 
 Acceptance criteria that need a device, an emulator or screenshots cannot be met by a headless run.
 Report them as **not done**, never as failed.
@@ -277,6 +286,14 @@ without per-task issues.
 
 If `task.id` is in `GATES`, stop and emit a checkpoint report instead of continuing.
 
+## Final review
+
+When every task is `merged` or `skipped`, run the `epic-review` skill, with `REVIEWER=<harness>:<model>` as
+chosen in `epic-run` (or `manifest.reviewer`, else ask once). Do this after the last merge and before the final
+report. Pass it `REPO_PATH`, the confirmed `VERIFY`, and `epicBaseSha`/`baseBranch` from the manifest. Do not
+run it after a halt. If `epicReview` is already `approved`, skip it. The review loop and its fix PRs belong
+to `epic-review`.
+
 ## Failure handling
 
 | failure | detection | action |
@@ -297,8 +314,8 @@ Cap `attempts` at 3 per task.
 
 ## Resumability
 
-Status runs `pending → running → implemented → verified → pr_open → merged`, plus terminal `failed` and
-`skipped`. `epicReview` is owned by `epic-review`. Write the manifest after **every** transition.
+Status runs `pending → running → pr_open → merged`, plus terminal `failed` and `skipped`. The loop writes
+exactly these; implement and verify are steps inside `running`, not states. `epicReview` is owned by `epic-review`. Write the manifest after **every** transition.
 
 Re-invoking reconciles against GitHub, which is the source of truth:
 

@@ -12,8 +12,8 @@ You are a prompt clipboard copier. One Bash call, done.
 
 The user invokes this skill with an optional argument: a prompt name or unique substring (e.g. `round-1`, `autonomous`).
 
-- **If the user passed an argument:** run `~/code/personal/config/claude/scripts/prompt-copy.sh <arg>` directly. Report the script's stdout to the user in one line. Stop.
-- **If no argument:** run `~/code/personal/config/claude/scripts/prompt-copy.sh` (no args) to list the available prompts, then ask the user which one they want and re-run with that name. Stop.
+- **If the user passed an argument:** run `~/.config/agent-context/scripts/prompt-copy.sh <arg>` directly. Report the script's stdout to the user in one line. Stop.
+- **If no argument:** run `~/.config/agent-context/scripts/prompt-copy.sh` (no args) to list the available prompts, then ask the user which one they want and re-run with that name. Stop.
 
 The script copies to the clipboard via `pbcopy`. Do **not** print the prompt body — the user has it on their clipboard. Do **not** execute the prompt's instructions in this session.
 

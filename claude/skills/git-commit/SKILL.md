@@ -40,7 +40,7 @@ Call the script yourself via the Bash tool — substitute real values,
 never paste literal placeholders:
 
 ```
-~/code/personal/config/claude/scripts/commit.sh \
+~/.config/agent-context/scripts/commit.sh \
     -m "feat(x): ..." \
     -m "[AI_Code] harness: opencode, model: <model-id>"
 ```

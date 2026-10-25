@@ -21,7 +21,7 @@ fall back to the shell when a native-tool failure does not authorize that.
 If the harness permits CLI creation, use:
 
 ```bash
-~/code/personal/config/claude/scripts/pr-create.sh --title "<actual title>" --body-file "<actual body file>"
+~/.config/agent-context/scripts/pr-create.sh --title "<actual title>" --body-file "<actual body file>"
 ```
 
 Use the chosen base and draft state explicitly when needed. Personal PRs normally

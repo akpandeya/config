@@ -51,7 +51,7 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `brew-packages.txt` | Everything Homebrew installs |
 | `agents/communication.md` | Shared plain-language and local-explanation preferences |
 | `claude/skills/` | Personal skills, linked into Claude and the Gemini personal-skills plugin. Company-specific skills live in the private work-context repo. Jarvis-managed skill directories retain their own installation |
-| `claude/hooks/` | Claude Code PostToolUse hooks (e.g. `jarvis-register.sh` auto-subscribes PRs/Jira Claude creates) |
+| `claude/hooks/` | Claude Code hook scripts. None are wired up right now (`settings-hooks.json` has an empty `PostToolUse`), so `jarvis-register.sh` is not active |
 | `claude/settings-hooks.json` | Merged into `~/.claude/settings.json` — only replaces `hooks.PostToolUse`, preserves everything else |
 | `git/` | gitconfig templates (one personal, one work, one default with conditional includes) |
 | `gitconfig/` | Scoped git identity templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap. Real emails live in `emails.local.env` (gitignored — never commit them) |
