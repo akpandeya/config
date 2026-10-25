@@ -3,7 +3,7 @@ name: agy-drive
 description: >-
   Execute a decomposed issue with agy using the shared safe driver workflow,
   repository-specific verification and explicit merge policy.
-  Usage: agy-drive <owner/repo> <issue-number> [--reviewer=agy]
+  Usage: agy-drive <owner/repo> <issue-number> [--reviewer=opus|sonnet|agy]
 ---
 
 Read `~/code/personal/config/claude/skills/agy-drive/SKILL.md` as the shared
@@ -14,7 +14,9 @@ problem rather than guessing a stale workflow.
 
 Use the tools actually supported by this harness. Do not invent Claude `Agent`
 calls, background parameters or model names. An explicit reviewer choice wins;
-otherwise ask once before starting the driver.
+otherwise ask once before starting the driver. That choice selects the model for the
+single review of the whole epic after its last merge — there is no per-PR review — and
+any fixes it recommends are applied before the epic closes.
 
 The shared gates apply without exception: a clean owned workspace, real base
 branch and work ticket, dependency-aware tasks, relevant verification, pinned

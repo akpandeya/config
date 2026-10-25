@@ -61,8 +61,9 @@ Only applies when no epic was given. A single-epic run ignores this section.
 - **One epic at a time.** Each epic is fully finished — every task merged, and its
   final review done — before the next epic starts. Acquire that epic's lock when it
   starts and release it when it finishes or halts.
-- **Halt stops the run.** If any epic halts, or its final review returns `BLOCK`, do not
-  start the next epic. Report which epic stopped, why, and the resume command.
+- **Halt stops the run.** If any epic halts, or its final review ends `BLOCK` after the
+  fix rounds, do not start the next epic. Report which epic stopped, why, and the
+  resume command.
 - **Cool-down spans epics.** `PREV_FINISHED_AT` is the latest `finishedAt` across all
   manifests in the run, so the first task of the next epic waits too.
 - **Preflight per epic.** Base sync, `VERIFY` on the clean base and `EPIC_BASE_SHA` are
@@ -108,7 +109,7 @@ issues of their own), then:
 - Commit and PR bodies get `Part of #<EPIC>` only. **No `Closes` line** — a `Closes`
   on the first task would close the whole epic after one merge.
 - Step (i) skips the per-task issue check.
-- The epic is closed by the driver in the Final report step, after the final review.
+- The epic is closed by the driver in the Final review step.
 
 Otherwise it is a **legacy single-issue** manifest: every task closes
 `manifest.issue` and no `Part of` line is emitted. This is the original
@@ -327,13 +328,15 @@ Cap `attempts` at 3 per task.
 ## Resumability
 
 Status widens to `pending → running → implemented → verified → pr_open → merged`,
-plus terminal `failed` and `skipped`. Write the manifest after **every**
-transition — that file is the resume state.
+plus terminal `failed` and `skipped`. The epic-level review tracks its own
+`epicReview` field: `pending → reviewing → approved | blocked`. Write the manifest
+after **every** transition — that file is the resume state.
 
 Re-invoking reconciles against GitHub rather than trusting the file, because the
 recorded status is a hint and GitHub is the truth:
 
-1. Find the first task not `merged`/`skipped`.
+1. Find the first task not `merged`/`skipped`. If there is none, the tasks are done:
+   check `epicReview` and resume at the Final review unless it is already `approved`.
 2. `gh pr list --head <task.branch> --state all --json number,state,mergedAt`:
    - merged PR → mark `merged`, move on
    - open PR → resume at step (h)
@@ -346,19 +349,35 @@ Worst-case loss from a crash is one implementer run.
 
 ## Final review and epic close
 
-Runs only after every task is `merged` (never after a halt).
+Runs only after every task is `merged` (never after a halt). This is the epic's only
+review; set `epicReview` to `reviewing` when it starts and to `approved` or `blocked`
+when it ends.
 
-1. Spawn one Agent with `model: opus`, cwd `$REPO_PATH`, on the clean resolved base after
-   the last merge. It reviews the epic as a whole: `git log --oneline` for the epic's
-   merged PRs, and `git diff $EPIC_BASE_SHA...<final-base>`. It checks cross-task
-   consistency (duplicate helpers, conflicting prefs keys, strings or permissions added
-   twice, a gate's contract changed later), the epic's acceptance and design decisions in
-   the epic body, and that `VERIFY` passes on that base. It ends `VERDICT: APPROVE` or
-   `VERDICT: BLOCK <reason>`. It reports read-only findings; send a necessary,
-   authorized fix back through the implementation workflow.
-2. On `APPROVE`, and only if the epic has no per-task issues: `gh issue close <EPIC> --comment "Done: <PR list>"`.
-3. On `BLOCK`: leave the epic open, report the reason, stop. Merged PRs stay merged;
-   the block only stops the epic from closing.
+**1. Review the epic.** Spawn one Agent with `model: opus`, cwd `$REPO_PATH`, on the
+clean resolved base after the last merge. It reviews the epic as a whole:
+`git log --oneline` for the epic's merged PRs, and
+`git diff $EPIC_BASE_SHA...<final-base>`. It checks cross-task consistency (duplicate
+helpers, conflicting prefs keys, strings or permissions added twice, a gate's contract
+changed later), the epic's acceptance and design decisions in the epic body, frozen
+contracts, purity and determinism where the tasks require them, test substance, and that
+`VERIFY` passes on that base. Each finding cites file and line. It is read-only: report
+verified findings, never edit, stage, commit or push. It ends `VERDICT: APPROVE` or
+`VERDICT: BLOCK <reason>`.
+
+**2. Apply the recommended fixes.** On `BLOCK` (or any recommended fix), send an
+authorized fix back through the implementation workflow: one fix branch and PR with the
+same scope, verify, commit, CI and merge gates as any task. A work-repo fix PR awaits
+human merge — report it and stop rather than merging it yourself.
+
+**3. Re-review with a fresh instance.** Once the fixes are merged, spawn a **new** Opus
+Agent — a different instance, never the one that proposed the fixes — on the updated
+base. It repeats step 1 over the whole epic and ends `VERDICT: APPROVE` or
+`VERDICT: BLOCK <reason>`. Cap this at two fix rounds; if it still blocks, set
+`epicReview: "blocked"`, leave the epic open, report and stop. Merged PRs stay merged; a
+block only stops the epic from closing.
+
+**4. Close the epic.** On `APPROVE`, set `epicReview: "approved"`, and only if the epic
+has no per-task issues: `gh issue close <EPIC> --comment "Done: <PR list>"`.
 
 Because there is no per-PR review, the verify and CI gates are the only checks before a
 task merges. The Opus review sees the whole epic afterwards and cannot undo a merge.

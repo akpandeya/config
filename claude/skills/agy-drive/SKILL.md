@@ -1,16 +1,19 @@
 ---
 name: agy-drive
 description: >-
-  Drive a decomposed GitHub issue or epic using agy, with one PR per task,
-  independent review and scope-aware merge policy.
+  Drive a decomposed GitHub issue or epic using agy, with one PR per task and a
+  single review of the whole epic after its last merge, followed by any fixes the
+  review recommends.
   Usage: /agy-drive <owner/repo> <issue-number> [--reviewer=opus|sonnet|agy] [--retry-failed]
 allowed-tools: Bash, Read, Write, Agent
 argument-hint: "<owner/repo> <issue-number> [--reviewer=opus|sonnet|agy] [--retry-failed]"
 ---
 
 Orchestrate autonomous implementation of a GitHub issue — or a whole epic — using
-`agy`. Each task from the decomposed manifest runs as a separate `agy` invocation,
-gets its own PR, and is reviewed before the next dependent task starts.
+`agy`. Each task from the decomposed manifest runs as a separate `agy` invocation and
+gets its own PR. The whole epic is reviewed **once, after its last merge** — there is
+no per-PR review — and any fixes that review recommends are applied before the epic
+closes.
 Publishing is part of this explicitly invoked end-to-end workflow; work-repo
 merges still belong to a human. A plan-only invocation stops before execution.
 Use the shared communication style for reports, without an HTML page per status.
@@ -26,6 +29,9 @@ behaviour for manifests that don't set them.
 Extract `REPO`, `ISSUE_NUM`, optional `REVIEWER`, optional `RETRY_FAILED`.
 `SLUG` = owner + "-" + repo-name + "-issue-" + issue-number.
 `PROMPT_DIR` = `~/.claude/agy-prompts/$SLUG`.
+
+`REVIEWER` selects the model for the **single epic-level review**, run after the last
+task merges. It does not review each PR.
 
 ## Check for manifest
 
@@ -43,8 +49,7 @@ Read the manifest and resolve, each with its default:
 | `EPIC` | `manifest.epic` | `manifest.issue` when the manifest has no per-task issues, else `null` |
 | `VERIFY` | `manifest.verifyCommands` → repo `CLAUDE.md` "Full verification" / "Build & Test" command → `["npm run build", "npm test"]` only if `package.json` exists | — (see below) |
 | `COOLDOWN` | `manifest.cooldownSeconds` | `540` |
-| `REVIEWER` | `--reviewer` → `manifest.reviewer` → ask | — |
-| `FINAL_REVIEWER` | `--final-reviewer` → `manifest.finalReviewer` | `null` (no epic-level review) |
+| `REVIEWER` | `--reviewer` → `manifest.reviewer` → `manifest.finalReviewer` → ask | — |
 | `GATES` | `manifest.gateAfter` | `[]` |
 
 **Inferred values need confirmation.** If `VERIFY`, `EPIC` or `REVIEWER` came from
@@ -72,8 +77,8 @@ is set and equals `manifest.issue` (the tasks are sections of one epic issue, no
 issues of their own), then:
 - Commit and PR bodies get `Part of #<EPIC>` only. **No `Closes` line** — a `Closes`
   on the first task would close the whole epic after one merge.
-- Step (j) skips the per-task issue check.
-- The epic is closed by the driver in the Final report step, after the final review.
+- Step (i) skips the per-task issue check.
+- The epic is closed by the driver in the Final review step.
 
 Otherwise it is a **legacy single-issue** manifest: every task closes
 `manifest.issue` and no `Part of` line is emitted. This is the original
@@ -81,13 +86,14 @@ behaviour — old manifests are unaffected.
 
 ## Ask reviewer if not provided
 
-If `--reviewer` was absent and `manifest.reviewer` is unset, ask:
+If `--reviewer` was absent and neither `manifest.reviewer` nor `manifest.finalReviewer`
+is set, ask once — the answer is used for the single epic-level review, not per PR:
 
-Who should review each PR before merging?
+Which model should review the epic after its last merge?
 - **Opus** — deepest review; checks frozen contracts, purity, determinism and test
-  substance, and blocks the merge on a violation (~8 min per PR). Use for engine,
-  schema and contract work.
-- **Sonnet** — thorough, good for ordinary feature changes (~2 min per PR)
+  substance, and blocks the epic close on a violation. Use for engine, schema and
+  contract work.
+- **Sonnet** — thorough, good for ordinary feature changes
 - **agy** — a separate read-only pass over the acceptance criteria
 
 ## Drive the task loop
@@ -132,6 +138,8 @@ task N+1's commands before task N reaches `merged`.
   A missing shared spec is a hard abort, not a warning.
 - Run `VERIFY` on the clean resolved base and confirm green, so any later failure is
   unambiguously attributable to agy.
+- Record `EPIC_BASE_SHA` = `git rev-parse HEAD` on that clean base. The epic-level
+  review diffs the whole epic against it.
 
 Then work through tasks in dependency order (respect `blockedBy`), skipping
 `merged` and `skipped`. A `failed` task is **not** retried unless `--retry-failed`
@@ -143,7 +151,7 @@ One tracked Bash call, cool-down fused to the front. Use only permissions
 available in the current harness; do not bypass its execution policy.
 
 ```bash
-COOL=$(( COOLDOWN - ( $(date +%s) - PREV_FINISHED_AT ) ))   # 0 on the first task
+COOL=$(( COOLDOWN - ( $(date +%s) - PREV_AGY_EXIT_AT ) ))   # 0 on the first task
 if [ $COOL -gt 0 ]; then
   echo "COOLDOWN START $(date +%s) ($(date)) — ${COOL}s"
   sleep $COOL
@@ -152,10 +160,11 @@ fi
 cd <repoPath> && git checkout <base> && git pull --ff-only && git checkout -b <task.branch>
 ```
 
-The cool-down is a **minimum inter-task-start interval**, not a fixed tax: a task
-that already took longer than `COOLDOWN` pays nothing, a fast one pays the
-remainder. That bounds requests-per-hour — which is what usage limits actually
-measure — without wasting wall-clock.
+The cool-down runs from the moment the **previous agy process exited**
+(`agyExitedAt`, recorded in step (b)), not from merge. The default of 540 s (9 min)
+is a rest after every agy run, so requests per hour stay bounded. Verify, PR, CI and
+merge time counts toward it: if those steps already took `COOLDOWN` seconds, no
+extra wait is added. Set `cooldownSeconds: 0` in the manifest to turn it off.
 
 Set `status: "running"`, increment `attempts`, write `startedAt` **before**
 launching agy.
@@ -175,6 +184,9 @@ agy --dangerously-skip-permissions --print-timeout 30m \
 ```
 
 Then read only `tail -60` of that log.
+
+As soon as agy's process exits, write `agyExitedAt` (epoch seconds) to the task in the
+manifest. The next task's cool-down in step (a) is measured from it.
 
 ### c. Output gate
 
@@ -232,75 +244,23 @@ URL, account or Git credential configuration.
 Record `task.pr` and set `status: "pr_open"`, then **write the manifest
 immediately** — this is the most important persistence point for resumability.
 
-### h. Review
-
-**reviewer = opus** — spawn an Opus Agent (`model: opus`), cwd `$REPO_PATH`,
-branch checked out. It must check, in this order:
-
-1. **Frozen-contract compliance**, if the task prompt names frozen files. Diff them
-   against the pinned task base; any rename, retype, removal or narrowed optionality is
-   **blocking**. Additive-only is the bar. This is the check a cheaper reviewer
-   waves through, so it goes first.
-2. **Purity**, if the task prompt requires it — grep for the forbidden constructs
-   it names (`Math.random`, `Date.now`, `fetch(`, DOM globals, I/O).
-3. **Determinism** — if the package claims reproducibility, there must be a test
-   asserting identical inputs produce identical serialized output, plus a
-   round-trip test. Rules added without matching coverage is a finding.
-4. **Acceptance criteria** — walk each `- [ ]` in the task file and state
-   met / not-met / partial, **citing the file and line** that satisfies it.
-   "Looks fine" is not acceptable.
-5. **Conventions** — conformance to whatever template the task prompt points at.
-6. **Scope** — `git diff --name-only <task-base>...<branch>` within `task.scope`;
-   dependency edits consistent with the approved task and verification.
-7. **Test substance** — no `.skip`/`.only`, no assertion-free tests, no snapshot
-   added to paper over a failure, no loosened existing assertions. Diffs to
-   pre-existing test files get extra scrutiny.
-8. **Re-run `VERIFY` itself** and confirm exit 0.
-
-It is read-only: report verified findings and evidence. Send approved fixes back
-to the implementer, verify them and create a new explicit-path commit. Do not
-amend or force-push merely because a reviewer found an issue.
-
-It **may not**: change a frozen schema (even to improve it), add dependencies,
-edit outside `task.scope`, or redesign the approach.
-
-It ends with `VERDICT: APPROVE` or `VERDICT: BLOCK <reason>`. On `BLOCK`, mark the
-task `failed` and halt — do not merge.
-
-**reviewer = sonnet** — spawn a Sonnet Agent (`model: sonnet`):
-"Review the open PR on branch `<task.branch>` in `<repoPath>`. Read
-`git diff <task-base>...<task.branch>`. Check each acceptance criterion in
-`$PROMPT_DIR/<task.promptFile>`. Run: `<VERIFY commands>`. Report verified issues without editing, staging, committing or pushing.
-The implementer handles fixes in a new commit."
-
-**reviewer = agy**:
-```bash
-agy --dangerously-skip-permissions --print-timeout 15m -p "
-Review the changes on git branch <task.branch> in <repoPath>.
-Read: git diff <task-base>...<task.branch>
-Check every acceptance criterion in $PROMPT_DIR/<task.promptFile>.
-Run, in order, stopping at the first failure: <VERIFY commands>
-Do not edit or publish. Report verified findings and evidence, then stop.
-"
-```
-
-### i. Wait for CI + merge
+### h. Wait for CI + merge
 
 Use the read-only pr-watch helper for the exact repository/PR, with a bounded
 wait (for example, `--interval 30 --max-ticks 40`). A branch's mergeability
 status alone does not prove checks passed.
 
-- Confirmed passing checks and satisfied review/branch requirements → use the
-  scope-aware pr-merge skill. For work repositories, leave
-  the PR awaiting human merge and stop dependent work. Record `merged` only
-  after GitHub confirms it.
+- Confirmed passing checks and satisfied branch requirements (including any human
+  review the repository requires) → use the scope-aware pr-merge skill. For work
+  repositories, leave the PR awaiting human merge and stop dependent work. Record
+  `merged` only after GitHub confirms it.
 - failing checks → this explicitly requested driver separately authorizes one
   scoped ci-fix commit/push, then resume observation
 - `DIRTY` (conflict) → report the divergence and request an approved recovery.
   Do not automatically rebase, amend or force-push.
 - timeout → `failed`, halt. **Never merge unverified.**
 
-### j. Settle
+### i. Settle
 
 Only after GitHub confirms the merge, set `status: "merged"`, write `finishedAt`
 and keep `pr`. A work PR awaiting human merge keeps `status: "pr_open"` and the
@@ -325,7 +285,7 @@ continuing. Gates belong after any task whose output every later task depends on
 | out-of-scope files | `status --porcelain` vs `task.scope` | preserve files, halt and resolve ownership/scope |
 | CI red | `statusCheckRollup` FAILURE | `ci-fix` ×1 → else `failed`, halt |
 | merge conflict | `mergeStateStatus: DIRTY` | halt and request an approved recovery |
-| reviewer BLOCK | `VERDICT: BLOCK` | `failed`, halt |
+| epic review BLOCK | `VERDICT: BLOCK` after two fix rounds | leave the epic open, report, stop |
 | **usage limit** | output matches `usage limit\|rate limit\|resets at\|429` | **not a failure** — parse the reset time, sleep until it + 120 s, do **not** increment `attempts`, retry the same task |
 | lock held | `mkdir` fails, exit 9 | abort this invocation; another driver is live |
 
@@ -338,13 +298,15 @@ Cap `attempts` at 3 per task.
 ## Resumability
 
 Status widens to `pending → running → implemented → verified → pr_open → merged`,
-plus terminal `failed` and `skipped`. Write the manifest after **every**
-transition — that file is the resume state.
+plus terminal `failed` and `skipped`. The epic-level review tracks its own
+`epicReview` field: `pending → reviewing → approved | blocked`. Write the manifest
+after **every** transition — that file is the resume state.
 
 Re-invoking reconciles against GitHub rather than trusting the file, because the
 recorded status is a hint and GitHub is the truth:
 
-1. Find the first task not `merged`/`skipped`.
+1. Find the first task not `merged`/`skipped`. If there is none, the tasks are done:
+   check `epicReview` and resume at the Final review unless it is already `approved`.
 2. `gh pr list --head <task.branch> --state all --json number,state,mergedAt`:
    - merged PR → mark `merged`, move on
    - open PR → resume at step (h)
@@ -357,20 +319,49 @@ Worst-case loss from a crash is one agy run.
 
 ## Final review and epic close
 
-Runs only after every task is `merged` (never after a halt).
+Runs only after every task is `merged` (never after a halt). This is the epic's only
+review — with no per-PR review, the verify and CI gates are the sole checks before a
+task merges, and this review sees the whole epic afterwards. Set `epicReview` to
+`reviewing` when it starts and to `approved` or `blocked` when it ends.
 
-1. If `FINAL_REVIEWER` is set, spawn one agent of that type (`opus` → `model: opus`,
-   `sonnet` → `model: sonnet`), cwd `$REPO_PATH`, on the clean resolved base after the last merge.
-   It reviews the epic as a whole: `git log --oneline` for the epic's merged PRs, and
-   `git diff <first-task-base>...<final-base>`. It checks cross-task consistency (duplicate
-   helpers, conflicting prefs keys, strings or permissions added twice, a gate's
-   contract changed later), the epic's acceptance and design decisions in the epic
-   body, and that `VERIFY` passes on that base. It ends `VERDICT: APPROVE` or
-   `VERDICT: BLOCK <reason>`. It reports read-only findings; send a necessary,
-   authorized fix back through the implementation workflow.
-2. On `APPROVE` (or with no `FINAL_REVIEWER`), and only if the epic has no per-task
-   issues: `gh issue close <EPIC> --comment "Done: <PR list>"`.
-3. On `BLOCK`: leave the epic open, report the reason, stop.
+**1. Review the epic.** Spawn one agent of the `REVIEWER` type (`opus` → `model: opus`,
+`sonnet` → `model: sonnet`, `agy` → a read-only `agy` pass), cwd `$REPO_PATH`, on the
+clean resolved base after the last merge. It must check, in this order:
+
+1. **Frozen-contract compliance**, if a task prompt names frozen files. Diff them
+   against the pinned task base; any rename, retype, removal or narrowed optionality is
+   **blocking**. Additive-only is the bar.
+2. **Cross-task consistency** — duplicate helpers, conflicting prefs keys, strings or
+   permissions added twice, a gate's contract changed later. Review
+   `git log --oneline` for the epic's merged PRs and
+   `git diff $EPIC_BASE_SHA...<final-base>`.
+3. **Epic acceptance and design decisions** — walk the epic body and each task's
+   `- [ ]` criteria, stating met / not-met / partial, **citing the file and line** that
+   satisfies each. "Looks fine" is not acceptable.
+4. **Purity and determinism**, if the tasks require them — grep for the forbidden
+   constructs the prompts name, and require coverage for any determinism claim.
+5. **Test substance** — no `.skip`/`.only`, no assertion-free tests, no snapshot added
+   to paper over a failure, no loosened existing assertions.
+6. **Re-run `VERIFY`** on that base and confirm exit 0.
+
+It is read-only: report verified findings and evidence, and never edit, stage, commit
+or push. Step 2 sends any approved fix through the implementation workflow. It ends
+`VERDICT: APPROVE` or `VERDICT: BLOCK <reason>`, with each finding citing file and line.
+
+**2. Apply the recommended fixes.** On `BLOCK` (or any recommended fix), implement the
+fixes through the normal implementation workflow: one fix branch and PR, the same scope,
+verify, commit, CI and merge gates as any task. In a work repo the fix PR still awaits
+human merge — report it and stop rather than merging it yourself.
+
+**3. Re-review with a fresh instance.** Once the fixes are merged, spawn a **new** agent
+— a different instance of the same model as `REVIEWER`, never the one that proposed the
+fixes — on the updated base. It repeats step 1 over the whole epic and ends
+`VERDICT: APPROVE` or `VERDICT: BLOCK <reason>`. Cap this at two fix rounds; if it still
+blocks, set `epicReview: "blocked"`, leave the epic open, report and stop. Merged PRs
+stay merged; a block only stops the epic from closing.
+
+**4. Close the epic.** On `APPROVE`, set `epicReview: "approved"`, and only if the epic
+has no per-task issues: `gh issue close <EPIC> --comment "Done: <PR list>"`.
 
 ## Final report
 
