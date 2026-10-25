@@ -1,53 +1,68 @@
 ---
 name: issue-decompose
 description: >-
-  Decompose a GitHub issue into atomic, agy/Jules-runnable task prompt files using
-  Opus with extended thinking. Honors a verbatim agy-tasks spec in the issue body.
-  Usage: /issue-decompose <owner/repo> <issue-number>
+  Decompose a GitHub issue into atomic, runnable task prompt files. The decomposer
+  harness and model are chosen by the caller; defaults to Opus with extended thinking
+  in Claude Code. Honors a verbatim agy-tasks spec in the issue body.
+  Usage: /issue-decompose <owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>]
 allowed-tools: Bash, Read, Write, Agent
-argument-hint: "<owner/repo> <issue-number>"
+argument-hint: "<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>]"
 ---
 
-Decompose a GitHub issue into small, atomic implementation tasks that can each be run
-independently by `agy` or Jules. Saves prompts to `~/.claude/agy-prompts/<slug>/`.
+Decompose a GitHub issue into small, atomic implementation tasks that can each be run independently
+by any implementer harness. Saves prompts to `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/<slug>/`.
+
+Run `/epic-run` to decompose, implement and review in one go. Run this skill alone only to re-decompose
+or to inspect the task list.
 
 ## Parse arguments
 
-`$ARGUMENTS` format: `<owner/repo> <issue-number>`
-Example: `akpandeya/party-planner 72`
+`$ARGUMENTS`: `<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>]`
 
-Extract `REPO` and `ISSUE_NUM` from `$ARGUMENTS`.
-Derive `SLUG` = repo owner + "-" + repo name + "-issue-" + issue number
-(e.g. `akpandeya-party-planner-issue-72`).
-Set `PROMPT_DIR` = `~/.claude/agy-prompts/$SLUG`.
+Example: `akpandeya/party-planner 72 DECOMPOSER=claude:opus`
+
+- `REPO`, `ISSUE_NUM`, and `SLUG` = owner + "-" + repo name + "-issue-" + issue number.
+- `PROMPT_DIR` = `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/$SLUG`.
+- `DECOMPOSER` defaults to `claude:opus` when absent.
 
 ## Locate repo
 
-Run `gh repo view $REPO --json url` to confirm the repo exists.
-Find the local clone: check common paths like `~/Documents/akpandeya/`,
-`~/code/`, `~/projects/`. If not found, skip repo-local file reads but
-still read the CLAUDE.md via `gh api repos/$REPO/contents/CLAUDE.md`.
+Run `gh repo view $REPO --json url` to confirm the repo exists. Find the local clone under the usual
+project folders. If none is found, skip local file reads and read `CLAUDE.md` or `AGENTS.md` via
+`gh api repos/$REPO/contents/CLAUDE.md`.
 
-## Spawn Opus decomposer
+## Run the decomposer
 
-Spawn an **Opus** Agent (`model: opus`) with the following prompt:
+Use the decomposer prompt below. It is the same prompt on every harness.
+
+- **Same harness as this session, and a Claude model:** spawn an Agent with the model from
+  `DECOMPOSER`, and with extended thinking requested.
+- **Same harness, non-Claude model (e.g. OpenCode):** use that harness's subagent with the model.
+- **Any other harness:**
+
+  ```bash
+  ~/.config/agent-context/scripts/run-harness.sh <harness> <model> decompose \
+    "$REPO_PATH" "$PROMPT_DIR/decompose.prompt.md" "$PROMPT_DIR/logs/decompose.<harness>.log"
+  ```
+
+  Write the prompt below to `$PROMPT_DIR/decompose.prompt.md` first. Create `$PROMPT_DIR/logs` before the run.
+
+### Decomposer prompt
 
 ---
-Think deeply before producing any output. Use extended thinking to reason through
-file dependencies, hidden coupling, and failure modes before committing to a task
-breakdown. Do not output the task list until your thinking is complete.
+Think deeply before producing any output. Reason through file dependencies, hidden coupling and
+failure modes before committing to a task breakdown. Do not output the task list until your reasoning
+is complete.
 
 You are decomposing GitHub issue into atomic implementation tasks.
 
-**Issue:** Run `gh issue view $ISSUE_NUM --repo $REPO --json title,body,labels` and
-read the full output.
+**Issue:** Run `gh issue view $ISSUE_NUM --repo $REPO --json title,body,labels` and read the full output.
 
-**FIRST — check for a verbatim task spec.** Inspect the issue body. If it contains
-the marker `<!-- agy-decompose: verbatim -->` or an `## agy-tasks` heading, you are in
-**VERBATIM MODE**: the author has already decomposed the work and you MUST NOT
-re-derive, split, merge, reorder, drop, or invent tasks. Transcribe each task block
-**1:1** into one task file, preserving the author's boundaries exactly. Each task block
-looks like:
+**FIRST, check for a verbatim task spec.** Inspect the issue body. If it contains the marker
+`<!-- agy-decompose: verbatim -->` or an `## agy-tasks` heading, you are in **VERBATIM MODE**: the author
+has already decomposed the work, and you MUST NOT re-derive, split, merge, reorder, drop or invent tasks.
+Transcribe each task block **1:1** into one task file, preserving the author's boundaries exactly. Each
+task block looks like:
 
 ```
 ### task-NN — <title>
@@ -59,30 +74,26 @@ looks like:
 - context: 1–2 sentences for an autonomous agent.
 ```
 
-In verbatim mode: use the block's `title`, `files`, `blockedBy`, `acceptance`, and
-`context` verbatim to fill the task-file template below (one `task-NN.md` per block,
-numbered exactly as authored). You may read the named `files` only to enrich the
-`## Context` line — never to change the task set. Still extract `standing-rules.md`
-from CLAUDE.md/AGENTS.md and write `manifest.json` (one entry per block, with the
-authored `blockedBy`). Then STOP — **skip the "Decompose" instructions below.**
+In verbatim mode, use the block's `title`, `files`, `blockedBy`, `acceptance` and `context` verbatim in
+the task-file template below, one `task-NN.md` per block, numbered exactly as authored. You may read the
+named `files` only to enrich the `## Context` line. Still extract `standing-rules.md` from `CLAUDE.md` or
+`AGENTS.md` and write `manifest.json`, one entry per block, with the authored `blockedBy`. Then STOP and skip
+the normal-mode steps below.
 
-If neither marker is present, proceed in normal (re-derivation) mode below.
+If neither marker is present, proceed in normal mode.
 
-**Standing rules:** Read `CLAUDE.md` or `AGENTS.md` in the repo root
-(path: `$REPO_PATH/CLAUDE.md` or via gh api). Extract the project's own rules
-about testing, style, DB, auth, etc. into a `standing-rules.md`.
+**Standing rules:** Read `CLAUDE.md` or `AGENTS.md` in the repo root. Extract the project's own rules about
+testing, style, DB and auth into `standing-rules.md`.
 
 **Relevant files:** Infer which 3–5 source files the issue will touch. Read them.
 
-**Decompose** (normal mode only — skip if you handled a verbatim spec above) into N
-tasks (usually 1–5) where each task:
-- Has one coherent responsibility, with file boundaries derived from the code
-- Has concrete acceptance criteria and the relevant repository verification
-- Has an explicit `blockedBy: ["task-NN"]` list if it must come after another task
-- Is self-contained enough for an autonomous agent to implement without questions
+**Decompose** (normal mode only) into N tasks, usually 1–5, where each task:
+- has one coherent responsibility, with file boundaries derived from the code;
+- has concrete acceptance criteria and the repository's verification;
+- has an explicit `blockedBy: ["task-NN"]` list if it must come after another task;
+- is self-contained enough for an autonomous agent to implement without questions.
 
-**For each task**, write a complete prompt file to
-`$PROMPT_DIR/task-NN.md` using this exact template:
+**For each task**, write `$PROMPT_DIR/task-NN.md` with this template:
 
 ```
 # <task title>
@@ -105,12 +116,12 @@ Working dir: <abs repo path>
 - Change dependency manifests only when the task requires it; update matching lockfiles
 - Make routine implementation decisions, but stop for unresolved scope or destructive actions
 - Run the repository's relevant verification, including end-to-end tests when required
-- Do NOT open a PR — implement, test, fix errors, then stop
+- Do NOT open a PR. Implement, test, fix errors, then stop
 ```
 
 **Also write:**
-- `$PROMPT_DIR/standing-rules.md` — the extracted repo standing rules
-- `$PROMPT_DIR/manifest.json` with schema:
+- `$PROMPT_DIR/standing-rules.md`, the extracted repo standing rules.
+- `$PROMPT_DIR/manifest.json`:
 
 ```json
 {
@@ -130,13 +141,11 @@ Working dir: <abs repo path>
 }
 ```
 
-After writing all files, print the full task list with titles, file counts,
-and dependency order. Then stop.
+After writing all files, print the task list with titles, file counts and dependency order. Then stop.
 ---
 
-## After the Opus agent returns
+## After the decomposer returns
 
-Read `$PROMPT_DIR/manifest.json` and show the user the decomposed task list.
-Tell them to run `/agy-drive $REPO $ISSUE_NUM` (agy implements) or
-`/sonnet-drive $REPO $ISSUE_NUM` (a Sonnet subagent implements, inside Claude Code)
-to execute it.
+Read `$PROMPT_DIR/manifest.json` and show the user the task list. Then tell them the next step:
+`/epic-run $REPO $ISSUE_NUM` runs the rest, or `/epic-drive $REPO $ISSUE_NUM IMPLEMENTER=<harness>:<model>`
+drives the tasks directly.

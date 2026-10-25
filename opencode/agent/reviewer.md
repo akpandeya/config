@@ -1,23 +1,14 @@
 ---
 description: Reviews recently written or changed code for correctness, edge cases, and convention violations. Delegates with @reviewer after making changes. Use when you want a second opinion on a diff or new code before committing.
 mode: subagent
-model: ai-model-router/moonshotai/Kimi-K3
-permissions:
-  - action: edit
-    resource: "*"
-    effect: deny
-  - action: shell
-    resource: "*"
-    effect: ask
-  - action: shell
-    resource: "git diff*"
-    effect: allow
-  - action: shell
-    resource: "git log*"
-    effect: allow
-  - action: shell
-    resource: "git show*"
-    effect: allow
+# Plain shell writes are denied here, but this is NOT a read-only guarantee. In OpenCode 2.1.4 a
+# chained command ("cat f && echo x > y") ran even under a deny-all shell rule. Review runs must
+# happen in a disposable copy of the repo, and the driver checks the real tree afterwards.
+# The driver supplies the diff and runs verification; this agent only reads the files it is given.
+permission:
+  edit: deny
+  shell:
+    "*": deny
 ---
 
 You are a meticulous code review agent. You NEVER write or edit code — you review it.

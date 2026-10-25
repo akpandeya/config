@@ -37,5 +37,4 @@ awscli
 
 # Group: AI
 # AI coding agents (tap resolves automatically on first install)
-anomalyco/tap/opencode
 rtk
