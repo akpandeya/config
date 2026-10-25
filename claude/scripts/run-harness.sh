@@ -92,10 +92,9 @@ PROMPT_DIR_OF_FILE=$(cd "$(dirname "$PROMPT_FILE")" && pwd)
 # Each harness gets the least permission that still lets the role work. Reviewers may edit and run
 # shell (to re-run verify), so they get the same level as implementers.
 case "$HARNESS:$ROLE" in
-  # A reviewer must re-run VERIFY, which needs shell. acceptEdits alone holds Bash for approval,
-  # which a headless run cannot give. The review cwd is a disposable worktree, so allow Bash there.
-  claude:review) PERMISSION=(--permission-mode acceptEdits --allowedTools=Bash) ;;
-  claude:*) PERMISSION=(--permission-mode acceptEdits) ;;
+  # Claude runs in bypass mode: acceptEdits holds shell commands (verify, git) for approval, which a
+  # headless run cannot give. The driver's own gates (scope, verify, clean-tree, worktree) still apply.
+  claude:*) PERMISSION=(--dangerously-skip-permissions) ;;
   opencode:review) PERMISSION=(--agent reviewer --auto) ;;
   opencode:*) PERMISSION=(--agent coder --auto) ;;
   # Headless agy denies shell under accept-edits and plan modes, so verify commands would be

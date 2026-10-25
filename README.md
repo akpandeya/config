@@ -11,8 +11,8 @@ Personal dotfiles + macOS bootstrap. One-command setup for a fresh Mac.
 #    Sign in to 1Password.
 
 # 2. Clone this repo via HTTPS (SSH keys come later).
-git clone https://github.com/akpandeya/config ~/code/personal/config
-cd ~/code/personal/config
+git clone https://github.com/akpandeya/config
+cd config
 
 # 3. Add your git identity emails (gitignored, never committed):
 cp gitconfig/emails.example.env gitconfig/emails.local.env
