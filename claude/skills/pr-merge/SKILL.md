@@ -11,7 +11,7 @@ Delegate to the scope-aware script via the Bash tool, substituting
 the real PR number — e.g. for PR 337:
 
 ```
-~/code/personal/config/claude/scripts/pr-merge.sh 337
+~/.config/agent-context/scripts/pr-merge.sh 337
 ```
 
 Do **not** use a `!` preamble or leave literal `<pr-number>` in the

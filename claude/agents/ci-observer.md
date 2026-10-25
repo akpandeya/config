@@ -17,7 +17,7 @@ or persisting a temporary App token.
 Run one bounded poller with the harness's tracked background-command facility:
 
 ```bash
-~/code/personal/config/claude/scripts/pr-wait-green.sh <number> --repo <owner/repo> --interval 60 --max-ticks 60
+~/.config/agent-context/scripts/pr-wait-green.sh <number> --repo <owner/repo> --interval 60 --max-ticks 60
 ```
 
 Use the actual values, not literal placeholders. The script prints `LOG_PATH=...`;

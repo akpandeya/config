@@ -1,7 +1,6 @@
 {
   "colorScheme": "dark",
   "enableTelemetry": false,
-  "model": "Gemini 3.5 Flash (High)",
   "permissions": {
     "allow": [
       "command(git status)",

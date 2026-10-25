@@ -1,7 +1,6 @@
 ---
 description: Implements planned code changes and runs builds/tests. Delegate coding tasks to @coder after planning; it reports changes, verification evidence, deviations, and blockers. Never commits or stages — the orchestrator owns integration.
 mode: subagent
-model: ai-model-router/moonshotai/Kimi-K3
 permissions:
   - action: subagent
     resource: "*"

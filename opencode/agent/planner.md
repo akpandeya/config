@@ -1,7 +1,6 @@
 ---
 description: Plans implementation approach for a task before any code is written. Delegates with @planner. Use when starting a non-trivial feature, refactor, or bug fix and you want a step-by-step plan first.
 mode: subagent
-model: ai-model-router/moonshotai/Kimi-K3
 permissions:
   - action: edit
     resource: "*"

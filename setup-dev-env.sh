@@ -365,24 +365,26 @@ fi
 link_config "$REPO_DIR/claude/personal-skills-plugin.json" \
             "$HOME/.gemini/config/plugins/personal-skills/plugin.json"
 
-# Symlink all non-jarvis skills to Antigravity's personal-skills plugin.
-# issue-decompose and agy-drive are excluded here since Antigravity gets
-# its own gemini-tailored versions from gemini/skills/ below.
+# Symlink all non-jarvis skills to Antigravity's personal-skills plugin. The same
+# skill files serve every harness, so there are no separate gemini copies.
 for skill_dir in "$REPO_DIR"/claude/skills/*/; do
     [ -f "$skill_dir/SKILL.md" ] || continue
     skill="$(basename "$skill_dir")"
     case "$skill" in
-        jarvis-suggest|jarvis-continue-in-phone|slack-catchup|issue-decompose|agy-drive|sonnet-drive) continue ;;
+        jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
     esac
     link_config "$skill_dir" \
                 "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
 done
 
-# Gemini-specific personal skills
-for skill in issue-decompose agy-drive; do
-    link_config "$REPO_DIR/gemini/skills/$skill" \
-                "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
-done
+# Stable path for the harness-neutral helper scripts used by the epic skills.
+# Skills reference ~/.config/agent-context/scripts, not the repo checkout path.
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Would create: $HOME/.config/agent-context"
+else
+    mkdir -p "$HOME/.config/agent-context"
+fi
+link_config "$REPO_DIR/claude/scripts" "$HOME/.config/agent-context/scripts"
 
 # Private skill links must follow creation of the Gemini plugin directory.
 PRIVATE_INSTALLER="$HOME/code/work/hf-workbench/scripts/install-agent-context.py"

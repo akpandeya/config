@@ -75,7 +75,7 @@ A request to observe a PR is not permission to fix or publish.
 
    ```
    git add -u <specific files>
-   ~/code/personal/config/claude/scripts/commit.sh \
+   ~/.config/agent-context/scripts/commit.sh \
        -m "fix(ci): <one-line description>" \
        -m "[AI_Code] harness: <actual-cli>, model: <actual-model>"
    ```
