@@ -4,8 +4,6 @@
 # account — used by pr-merge to pick the right merge policy.
 #
 #   ~/code/personal/*           → personal
-#   ~/Documents/akpandeya/*     → personal (also reachable as
-#                                  ~/code/akpandeya/* via a symlink)
 #   ~/code/work/*               → work
 #   anywhere else               → unknown
 #
@@ -16,7 +14,6 @@ set -euo pipefail
 
 case "$PWD/" in
     "$HOME/code/personal"/*) echo "personal" ;;
-    "$HOME/code/akpandeya"/* | "$HOME/Documents/akpandeya"/*) echo "personal" ;;
     "$HOME/code/work"/*)     echo "work"     ;;
     *)                       echo "unknown"  ;;
 esac
