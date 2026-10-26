@@ -22,7 +22,7 @@ yourself about to run a command that mutates the PR, stop.
 Pin exact versions up front so every later command inspects the same code:
 
 ```
-gh pr view <target> --json title,body,author,baseRefName,headRefName,state,additions,deletions,changedFiles,labels,baseRefOid,headRefOid
+gh pr view <target> --json url,title,body,author,baseRefName,headRefName,state,additions,deletions,changedFiles,labels,baseRefOid,headRefOid
 gh pr view <target> --json commits -q '.commits[] | .oid[0:8] + "  " + .committedDate + "  " + .messageHeadline'
 gh api "repos/<owner>/<repo>/compare/<baseRefOid>...<headRefOid>" --jq .merge_base_commit.sha
 ```
@@ -50,7 +50,10 @@ gh api "repos/<owner>/<repo>/compare/<baseRefOid>...<headRefOid>" --jq .merge_ba
 - If the user says the PR is part of a stack and asks for the stack: map it
   (links in the PR body, or the stacked-pr skill), pin and diff each PR the
   same way, and for every finding state whether it belongs to this PR's
-  local delta or is inherited from a lower PR.
+  local delta or is inherited from a lower PR. The PR whose local delta
+  introduced the problem owns the finding's comment location, even when
+  the problem was discovered in the assembled stack. Do not default to the
+  top PR; retain each owning PR's URL, pinned head and merge base.
 
 ### Re-reviews
 
@@ -154,21 +157,24 @@ If the user has told you in this conversation to let a specific class of
 finding pass ("letting X go", "don't flag Y"), don't re-raise it on a
 re-review unless the underlying thing materially changed.
 
-## 5. Verify findings against the live repo, not just the diff
+## 5. Verify findings at pinned revisions, then verify PR navigation
 
 The diff shows what changed, not whether the change is correct. For every
 candidate finding, check it against actual state at the pinned SHAs before
 writing it up:
 
 - **Line numbers**: diff-relative line numbers lie once a file has more than
-  one hunk. Pull the real file at the pinned head commit and count from
-  that, or reconstruct hunks precisely — don't eyeball unified-diff line
-  numbers. The quoted contents call from section 1 gets you the real file.
+  one hunk. Pull the real file at the pinned head for RIGHT/new lines, or
+  the pinned diff base for LEFT/deleted lines, and count from that, or
+  reconstruct hunks precisely — don't eyeball unified-diff line numbers.
+  Use the old path for deleted lines in renamed files. The quoted contents
+  call from section 1 gets you the real file; use the base SHA for old-side
+  evidence.
 - **"Is this dead code?"** — grep the whole repo (not just the diff) for
   callers before flagging something as unused.
-- **"Does this constraint/config still exist?"** — read the actual current
-  file (migration, port interface, config), don't assume from the PR
-  description.
+- **"Does this constraint/config still exist?"** — read the actual file at
+  the pinned revision (migration, port interface, config), don't assume
+  from the PR description.
 - **"Is this actually N+1 / a hot path?"** — grep for call sites to see if
   it's invoked once per request or in a loop before calling it a performance
   problem. State what you found, not what you assume.
@@ -177,6 +183,52 @@ writing it up:
 
 Findings that don't survive this check get dropped or downgraded, not
 included for effect.
+
+### Two locations per finding
+
+Keep review evidence separate from live navigation. Each finding has a primary
+**Comment in PR** link and a separate **Pinned source** link:
+
+1. **Locate the introducing change.** In the owning PR's complete pinned
+   local diff, identify the relevant changed line, file path (including any
+   rename), hunk and side: RIGHT for an added/new line, LEFT for a deleted/old
+   line. Diff positions are not file line numbers. Unchanged supporting code
+   is pinned evidence, not a comment location; do not attach a finding to an
+   unrelated changed line just to make it commentable.
+2. **Pin the evidence.** Link to the exact file and line at the owning PR's
+   reviewed head for RIGHT, or its pinned diff base and old path for LEFT,
+   using a full commit SHA in a `/blob/<sha>/<path>#L<line>` URL. Keep
+   supporting source links pinned too, including assembled-stack evidence
+   at the reviewed top head when relevant.
+3. **Check the live PR separately.** Before publishing the local report,
+   re-read the owning PR's base/head SHAs and inspect its complete Files
+   changed diff. Even if the head is unchanged, confirm the line is changed
+   in that PR's current diff. If the base or head differs from the pinned
+   review (including a historical review), map the reviewed change to the
+   live path, side and line using the actual hunk and surrounding code.
+   Matching a filename, old line number or isolated line text is not enough.
+   Do not silently replace the review's pinned revisions with live ones.
+   If the issue has been fixed, mark it fixed/historical rather than offering
+   a current comment target for the old finding.
+4. **Verify the line permalink.** Obtain the owning PR's Files changed line
+   URL and verify its rendered diff target identifies that exact file, side
+   and changed line. Preserve the PR's actual host and URL. Do not invent
+   `#diff-...` anchors or assume a computed filename hash proves the target
+   exists; an HTTP success response alone cannot verify a URL fragment.
+   Use the live line number and side in this link, not stale pinned numbers.
+   Recheck the live base/head after verification; if either moved again,
+   revalidate or mark the location unavailable. When navigation uses a newer
+   snapshot, note the verified live SHAs separately from the pinned evidence.
+5. **Fail explicitly, not approximately.** If ownership, the changed line,
+   live-code correspondence or the actual diff anchor cannot be verified,
+   show **Comment in PR: unavailable** with the reason, and retain
+   **Pinned source**. A generic PR URL, file-only anchor or source permalink
+   is not a substitute for a verified comment location. Keep any known
+   owning PR identified, without presenting an unverified line link.
+
+These are read-only navigation checks, never permission to create or post a
+comment. A verified comment link is valid at the checked live revision; pinned
+source remains the stable evidence if the PR later moves.
 
 ## 6. Output format
 
@@ -189,7 +241,8 @@ For each finding:
 
 ```
 **N. <short title>** — <blocker | should-fix | nit | question>
-`<file path>:<real line number>`
+[Comment in PR](<verified owning PR Files changed line URL>) — PR #<owning PR>, `<live path>:<live line>` (<RIGHT | LEFT>)
+[Pinned source](<exact pinned file/line URL>) — `<pinned path>:<pinned line>` at `<reviewed SHA>`
 \`\`\`
 <copy-pasteable comment text — see tone section>
 \`\`\`
@@ -198,6 +251,12 @@ For each finding:
 <context → step-by-step behavior → concrete expected-versus-actual example →
 consequence → direction of a fix, in plain language>
 ```
+
+Keep **Comment in PR** first: it is the finding's primary location in both chat
+and HTML. When unverified, replace only that link with
+`Comment in PR: unavailable — <reason>`; keep the separately labelled pinned
+source link and any known owning PR. Do not turn supporting unchanged code
+into a purported comment target.
 
 The explanation is for the user, not part of the pasteable comment. Include it
 for every finding without waiting for a follow-up request. Define unfamiliar
@@ -225,9 +284,17 @@ values accept `{"text": "...", "url": "https://..."}`, and bare https URLs in
 paragraphs are auto-linked), and list all stacked PRs and key files under
 `sources`. Every `Finding ...` section carries a `severity` (blocker |
 should-fix | nit | question — rendered as a colored badge) and a `location`:
-a plain `path:line` string, or `{"text": "...", "url": "https://..."}` linking
-to the exact line on GitHub at the pinned SHA. Section order is fixed as in
-the template; the headings of the non-finding sections are free text — the
+use `{"text": "Comment in PR: ...", "url": "https://..."}` for the verified
+owning PR's Files changed line URL, with the PR, path, live line and side in
+the text. Put `Pinned source: ...` and its bare HTTPS file/line URL in the
+finding's `paragraphs`, and add a labelled entry under `sources`. For an
+unverified comment target, use a plain-text `location` such as
+`Comment in PR: unavailable - live diff correspondence could not be verified`;
+retain the pinned paragraph, sources and pasteable comment. Use only these
+existing renderer fields, not new `comment_url`/`evidence`/`side` fields.
+Paragraphs are plain text with auto-linked URLs, not Markdown links.
+Section order is fixed as in the template; the headings of the non-finding
+sections are free text — the
 renderer only requires the `Finding` prefix on finding sections and one heading
 containing `Verdict`. Leftover `<sha>`/`<number>`/`<owner>`/`<repo>`
 placeholders in fill-in slots (summary, headings, metadata, location, sources)
@@ -240,7 +307,12 @@ stay in chat with the existing artifact path; do not create another tab just to
 confirm a fix. A clean review still gets a brief behavior overview, not invented
 findings.
 
-Review template for the artifact input JSON (sections in this order):
+Review template for the artifact input JSON (sections in this order). The
+`path/to/file.ext` path and its diff anchor below are illustrative, not a
+verified PR location. Replace the entire location URL with the verified
+owning-PR line permalink; do not reuse the sample anchor. This example uses
+RIGHT/head evidence; for LEFT use the pinned base and old path in the source
+links. Fill live and pinned line numbers separately if they differ.
 
 ```json
 {
@@ -257,8 +329,10 @@ Review template for the artifact input JSON (sections in this order):
      "paragraphs": ["per prior point: fixed / accepted / deferred / unresolved, with evidence"]},
     {"heading": "Finding N (severity, PR): short title",
      "severity": "blocker | should-fix | nit | question",
-     "location": "path/to/file.ext:<line>",
-     "paragraphs": ["Why this matters: context, expected vs actual, consequence, fix direction"],
+     "location": {"text": "Comment in PR: #<number> - path/to/file.ext:<line> (RIGHT)",
+                  "url": "https://github.com/<owner>/<repo>/pull/<number>/files#diff-67d508e772e0496a6cd4e7c39fbe3e5658c6efbd8343abf45b2ccdbf962c1ce3R<line>"},
+     "paragraphs": ["Pinned source: path/to/file.ext:<line> at reviewed head - https://github.com/<owner>/<repo>/blob/<head>/path/to/file.ext#L<line>",
+                    "Why this matters: context, expected vs actual, consequence, fix direction"],
      "comments": ["exactly the copy-pasteable comment text"]},
     {"heading": "Verified claims (checked, not assumed)",
      "paragraphs": ["what was verified against the pinned SHAs; settled points not re-raised"]},
@@ -270,13 +344,21 @@ Review template for the artifact input JSON (sections in this order):
     "Pinned revisions": {"text": "base <sha>...head <sha>",
                          "url": "https://github.com/<owner>/<repo>/compare/<base>...<head>"}
   },
-  "sources": [{"label": "PR #<number> (<what>)", "url": "https://github.com/<owner>/<repo>/pull/<number>"}]
+  "sources": [
+    {"label": "PR #<number> (<what>)", "url": "https://github.com/<owner>/<repo>/pull/<number>"},
+    {"label": "Finding N - Pinned source: path/to/file.ext:<line> (reviewed head)",
+     "url": "https://github.com/<owner>/<repo>/blob/<head>/path/to/file.ext#L<line>"}
+  ]
 }
 ```
 
 Omit the leading "What changed since last review" section for a first review.
 For a stack, one "Finding N" section per finding with the owning PR in the
-heading; metadata's compare URL spans the whole stack's merge base to top head.
+heading and its own verified PR comment location, even for a lower PR.
+Each finding's source links use that finding's pinned evidence revision, not
+automatically the top head; metadata's compare URL still spans the whole
+stack's merge base to top head. Replace the single-PR placeholders per finding,
+and list all stack PRs and pinned supporting files under `sources`.
 Dark mode is automatic (the page follows the system theme); no toggle needed.
 
 ## 7. Tone for the comment text
