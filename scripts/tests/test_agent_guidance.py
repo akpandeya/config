@@ -346,6 +346,8 @@ class ExplainerTest(unittest.TestCase):
         self.assertEqual(output.count('class="copy"'), 1)
         self.assertIn("Generated ", output)
         self.assertIn("https://github.com/hellofresh/production-planning/pull/5065", output)
+        self.assertIn("/changes#diff-", output)
+        self.assertIn("Diff-validated, UI-unverified", output)
         self.assertIn("https://github.com/hellofresh/production-planning/compare/ab33640f", output)
 
     def test_generic_mode_skips_review_validation(self):

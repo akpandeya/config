@@ -31,13 +31,15 @@ gh api "repos/<owner>/<repo>/compare/<baseRefOid>...<headRefOid>" --jq .merge_ba
   base is the **merge base** of the pinned base and head commits (the
   compare call above), not the base-branch tip.
 - Get the diff between the pinned merge base and pinned head with
-  `git diff <merge_base> <head_sha>` (fetch the two exact objects first), or
-  the pinned API equivalent
+  `git diff <merge_base> <head_sha>` when the exact objects are already
+  available, or the pinned API equivalent
   `gh api "repos/<owner>/<repo>/compare/<merge_base>...<head_sha>"`. Never
   substitute a current `gh pr diff` — it follows moving branch tips and is
   wrong for a pinned or historical review. The compare API truncates large
   file patches — if a changed file shows no visible patch or the diff looks
-  cut off, fall back to the local git diff before reviewing that file.
+  cut off, use a disposable clone outside the reviewed checkout for the
+  complete local diff. Do not fetch, check out or otherwise mutate the
+  reviewed repository merely to obtain review evidence.
 - Quote API URLs containing `?` — zsh glob-expands them otherwise:
   `gh api "repos/<owner>/<repo>/contents/<path>?ref=<head_sha>" -q .content | base64 -d`
   fetches a file at the pinned head.
@@ -157,7 +159,7 @@ If the user has told you in this conversation to let a specific class of
 finding pass ("letting X go", "don't flag Y"), don't re-raise it on a
 re-review unless the underlying thing materially changed.
 
-## 5. Verify findings at pinned revisions, then verify PR navigation
+## 5. Verify findings at pinned revisions, then generate PR navigation
 
 The diff shows what changed, not whether the change is correct. For every
 candidate finding, check it against actual state at the pinned SHAs before
@@ -184,6 +186,110 @@ writing it up:
 Findings that don't survive this check get dropped or downgraded, not
 included for effect.
 
+### Generate all finding links together
+
+Use the read-only helper after the findings and their owning PRs are known:
+
+```bash
+~/.config/agent-context/scripts/pr-comment-links.py \
+  --input /tmp/deep-review-pr-123-links.json \
+  > /tmp/deep-review-pr-123-links.out.json
+```
+
+The request is one batch so PR metadata and complete diffs are read and parsed
+once per revision pair:
+
+```json
+{
+  "repository": "/absolute/path/to/checkout",
+  "pr_url": "https://github.com/owner/repo/pull/123",
+  "reviewed": {
+    "base_tip": "1111111111111111111111111111111111111111",
+    "merge_base": "2222222222222222222222222222222222222222",
+    "head": "3333333333333333333333333333333333333333"
+  },
+  "findings": [
+    {"id": "finding-1", "path": "src/example.py", "side": "RIGHT", "line": 42},
+    {"id": "finding-2", "path": "src/old.py", "side": "LEFT", "line": 17}
+  ]
+}
+```
+
+Use full SHAs and real values. The helper validates the complete request before
+emitting results. It rejects malformed or partial input and explicitly reports
+missing Git objects, binary targets, submodules, context-line targets, and
+unsupported/ambiguous cases rather than guessing. It does not fetch, check out,
+write to the reviewed repository, or post to GitHub; make the required commit
+objects available before invoking it.
+
+The helper:
+
+- recomputes each merge base from the base tip and head;
+- parses the complete merge-base-to-head diff with old/new hunk counters;
+- accepts only an added line for `RIGHT` or deleted line for `LEFT` — diff
+  positions and context lines are never comment locations;
+- keeps old path, new path, diff-anchor path and pinned-source path separate
+  for renames and deletions;
+- constructs the observed GitHub candidate convention
+  `<PR URL>/changes#diff-<SHA256(repository-relative diff path)>R<new-line>`
+  or `L<old-line>`;
+- creates a separate full-SHA pinned source URL at the reviewed head/new path
+  for `RIGHT`, or reviewed merge base/old path for `LEFT`; and
+- bounds revision retries if the PR moves during the run, reporting the last
+  coherent snapshot instead of looping.
+
+The hash/fragment is a GitHub UI convention, not a guaranteed public API.
+Computing it and receiving HTTP 200 for the page do not verify that the
+fragment rendered or selected the intended line.
+
+### Preserve reviewed evidence and map the live diff
+
+The original review pins never move. Compare the reviewed effective diff with
+the current owning PR's effective diff (current merge base to current head):
+
+- A changed base-branch tip alone is metadata movement. If merge base, head and
+  relevant effective diff are unchanged, reuse the cached Git evidence. Prior
+  rendered verification may also be retained when the candidate URL and
+  validated target fingerprint still match; retain the snapshot where it was
+  rendered and record the new live metadata separately.
+- If the effective diff changes, revalidate the affected finding. The helper
+  maps only one exact hunk-level correspondence, including the target's
+  position among surrounding diff lines. Never relocate a finding by matching
+  one filename, old line number or isolated line of text.
+- If correspondence is absent or ambiguous, the current comment location is
+  unavailable. Keep the original pinned evidence and state whether the issue
+  appears fixed, historical, or simply unmappable after the change.
+
+For stacked PRs, run the helper against each owning PR and keep every finding
+attached to the PR whose local delta introduced it. Do not move a lower-PR
+finding to the top PR merely because the assembled stack exposes it.
+
+For closed or merged PRs, retain the PR state as navigation metadata. State
+alone does not prove a finding fixed, does not prove its diff unavailable, and
+does not convert an historical review conclusion into a current merge
+recommendation.
+
+### Verification statuses
+
+Use exactly one status per finding:
+
+- **Rendered-verified** — the actual GitHub Files changed anchor was inspected
+  and confirmed to target the exact file, side and changed line at the recorded
+  live revisions.
+- **Diff-validated, UI-unverified** — Git metadata, effective diff,
+  correspondence, path, side and changed line are verified, but the generated
+  URL fragment was not inspected in GitHub's rendered UI. This is the default
+  successful helper result and is allowed in the report.
+- **Unavailable** — ownership, a changed-line target, correspondence, or a
+  supported diff could not be established without guessing.
+
+Browser inspection is optional escalation. Use it when the user explicitly
+asks for rendered verification or when it can resolve real uncertainty. If it
+is unavailable or interrupted, keep the honest Git-only status; do not launch a
+long browser workaround. Never claim `Rendered-verified` because a URL was
+generated, an HTTP request succeeded, or a comment could theoretically be
+submitted. This workflow never submits a comment.
+
 ### Two locations per finding
 
 Keep review evidence separate from live navigation. Each finding has a primary
@@ -200,35 +306,27 @@ Keep review evidence separate from live navigation. Each finding has a primary
    using a full commit SHA in a `/blob/<sha>/<path>#L<line>` URL. Keep
    supporting source links pinned too, including assembled-stack evidence
    at the reviewed top head when relevant.
-3. **Check the live PR separately.** Before publishing the local report,
-   re-read the owning PR's base/head SHAs and inspect its complete Files
-   changed diff. Even if the head is unchanged, confirm the line is changed
-   in that PR's current diff. If the base or head differs from the pinned
-   review (including a historical review), map the reviewed change to the
-   live path, side and line using the actual hunk and surrounding code.
-   Matching a filename, old line number or isolated line text is not enough.
-   Do not silently replace the review's pinned revisions with live ones.
-   If the issue has been fixed, mark it fixed/historical rather than offering
-   a current comment target for the old finding.
-4. **Verify the line permalink.** Obtain the owning PR's Files changed line
-   URL and verify its rendered diff target identifies that exact file, side
-   and changed line. Preserve the PR's actual host and URL. Do not invent
-   `#diff-...` anchors or assume a computed filename hash proves the target
-   exists; an HTTP success response alone cannot verify a URL fragment.
-   Use the live line number and side in this link, not stale pinned numbers.
-   Recheck the live base/head after verification; if either moved again,
-   revalidate or mark the location unavailable. When navigation uses a newer
-   snapshot, note the verified live SHAs separately from the pinned evidence.
+3. **Validate the live target separately.** Use the helper's current snapshot
+   and complete effective diff. Do not silently replace reviewed pins with
+   live revisions. If the current target exists, use its live path, side and
+   line in the candidate link and include the status. If the issue was fixed,
+   mark it fixed/historical instead of offering the old target as current.
+4. **Escalate rendered verification only when needed.** If the actual rendered
+   Files changed target is inspected, record the live base tip, merge base,
+   head, helper-provided target fingerprint and exact URL as rendered evidence.
+   Recheck revisions once; if they moved, rerun the bounded helper workflow.
+   Preserve the rendered status only when the URL and target fingerprint still
+   match; otherwise downgrade it.
 5. **Fail explicitly, not approximately.** If ownership, the changed line,
-   live-code correspondence or the actual diff anchor cannot be verified,
+   or live-code correspondence cannot be verified,
    show **Comment in PR: unavailable** with the reason, and retain
    **Pinned source**. A generic PR URL, file-only anchor or source permalink
-   is not a substitute for a verified comment location. Keep any known
-   owning PR identified, without presenting an unverified line link.
+   is not a substitute for a line target. Keep any known owning PR identified.
 
-These are read-only navigation checks, never permission to create or post a
-comment. A verified comment link is valid at the checked live revision; pinned
-source remains the stable evidence if the PR later moves.
+These are read-only navigation checks, never permission to create a draft,
+review or comment. A candidate or rendered-verified comment link belongs to the
+recorded live revision; pinned source remains the stable evidence if the PR
+later moves.
 
 ## 6. Output format
 
@@ -241,7 +339,7 @@ For each finding:
 
 ```
 **N. <short title>** — <blocker | should-fix | nit | question>
-[Comment in PR](<verified owning PR Files changed line URL>) — PR #<owning PR>, `<live path>:<live line>` (<RIGHT | LEFT>)
+[Comment in PR](<owning PR Files changed line URL>) — PR #<owning PR>, `<live path>:<live line>` (<RIGHT | LEFT>) — <Rendered-verified | Diff-validated, UI-unverified>
 [Pinned source](<exact pinned file/line URL>) — `<pinned path>:<pinned line>` at `<reviewed SHA>`
 \`\`\`
 <copy-pasteable comment text — see tone section>
@@ -255,8 +353,9 @@ consequence → direction of a fix, in plain language>
 Keep **Comment in PR** first: it is the finding's primary location in both chat
 and HTML. When unverified, replace only that link with
 `Comment in PR: unavailable — <reason>`; keep the separately labelled pinned
-source link and any known owning PR. Do not turn supporting unchanged code
-into a purported comment target.
+source link and any known owning PR. `Diff-validated, UI-unverified` is a valid
+linked state, not "unverified" for this unavailable rule. Do not turn supporting
+unchanged code into a purported comment target.
 
 The explanation is for the user, not part of the pasteable comment. Include it
 for every finding without waiting for a follow-up request. Define unfamiliar
@@ -284,14 +383,17 @@ values accept `{"text": "...", "url": "https://..."}`, and bare https URLs in
 paragraphs are auto-linked), and list all stacked PRs and key files under
 `sources`. Every `Finding ...` section carries a `severity` (blocker |
 should-fix | nit | question — rendered as a colored badge) and a `location`:
-use `{"text": "Comment in PR: ...", "url": "https://..."}` for the verified
-owning PR's Files changed line URL, with the PR, path, live line and side in
-the text. Put `Pinned source: ...` and its bare HTTPS file/line URL in the
-finding's `paragraphs`, and add a labelled entry under `sources`. For an
-unverified comment target, use a plain-text `location` such as
-`Comment in PR: unavailable - live diff correspondence could not be verified`;
-retain the pinned paragraph, sources and pasteable comment. Use only these
-existing renderer fields, not new `comment_url`/`evidence`/`side` fields.
+use `{"text": "Comment in PR: ... - Diff-validated, UI-unverified", "url":
+"https://..."}` for a generated candidate, or the same shape with
+`Rendered-verified` after actual UI inspection. Include the PR, path, live line
+and side in the text. Put `Pinned source: ...` and its bare HTTPS file/line URL
+in the finding's `paragraphs`, and add a labelled entry under `sources`. Put
+the recorded live snapshot and what was actually verified in `metadata` or
+`paragraphs`. For an unavailable target, use a plain-text `location` such as
+`Comment in PR: unavailable - live diff correspondence was ambiguous`; retain
+the pinned paragraph, sources and pasteable comment. Use only these existing
+renderer fields, not new `comment_url`/`evidence`/`side`/`verification_status`
+fields.
 Paragraphs are plain text with auto-linked URLs, not Markdown links.
 Section order is fixed as in the template; the headings of the non-finding
 sections are free text — the
@@ -329,9 +431,10 @@ links. Fill live and pinned line numbers separately if they differ.
      "paragraphs": ["per prior point: fixed / accepted / deferred / unresolved, with evidence"]},
     {"heading": "Finding N (severity, PR): short title",
      "severity": "blocker | should-fix | nit | question",
-     "location": {"text": "Comment in PR: #<number> - path/to/file.ext:<line> (RIGHT)",
-                  "url": "https://github.com/<owner>/<repo>/pull/<number>/files#diff-67d508e772e0496a6cd4e7c39fbe3e5658c6efbd8343abf45b2ccdbf962c1ce3R<line>"},
-     "paragraphs": ["Pinned source: path/to/file.ext:<line> at reviewed head - https://github.com/<owner>/<repo>/blob/<head>/path/to/file.ext#L<line>",
+     "location": {"text": "Comment in PR: #<number> - path/to/file.ext:<line> (RIGHT) - Diff-validated, UI-unverified",
+                  "url": "https://github.com/<owner>/<repo>/pull/<number>/changes#diff-67d508e772e0496a6cd4e7c39fbe3e5658c6efbd8343abf45b2ccdbf962c1ce3R<line>"},
+     "paragraphs": ["Verification: Git merge base, complete diff, hunk, path, RIGHT line and reviewed-to-live correspondence were checked; the rendered GitHub fragment was not inspected.",
+                    "Pinned source: path/to/file.ext:<line> at reviewed head - https://github.com/<owner>/<repo>/blob/<head>/path/to/file.ext#L<line>",
                     "Why this matters: context, expected vs actual, consequence, fix direction"],
      "comments": ["exactly the copy-pasteable comment text"]},
     {"heading": "Verified claims (checked, not assumed)",
@@ -341,8 +444,10 @@ links. Fill live and pinned line numbers separately if they differ.
   ],
   "metadata": {
     "PR": {"text": "#<number>", "url": "https://github.com/<owner>/<repo>/pull/<number>"},
+    "PR state": "open",
     "Pinned revisions": {"text": "base <sha>...head <sha>",
-                         "url": "https://github.com/<owner>/<repo>/compare/<base>...<head>"}
+                         "url": "https://github.com/<owner>/<repo>/compare/<base>...<head>"},
+    "Navigation snapshot": "live merge base <base>, head <head>; diff validated, rendered UI not inspected"
   },
   "sources": [
     {"label": "PR #<number> (<what>)", "url": "https://github.com/<owner>/<repo>/pull/<number>"},
@@ -360,6 +465,18 @@ automatically the top head; metadata's compare URL still spans the whole
 stack's merge base to top head. Replace the single-PR placeholders per finding,
 and list all stack PRs and pinned supporting files under `sources`.
 Dark mode is automatic (the page follows the system theme); no toggle needed.
+
+### Refreshing artifact links
+
+Treat "refresh the artifact links" as navigation maintenance, not a new review:
+
+- preserve findings, severity, pasteable comments, explanations and all
+  reviewed evidence pins;
+- update only PR state, current snapshot, comment-link target and verification
+  status;
+- revalidate only findings whose effective diff changed; and
+- say explicitly that no fresh full review, test run or discussion sweep was
+  performed.
 
 ## 7. Tone for the comment text
 

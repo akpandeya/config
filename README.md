@@ -238,8 +238,15 @@ browser open reports the saved path, not a false success.
 Focused checks:
 
 ```bash
-python3 -m unittest discover -s scripts/tests -p 'test_agent_guidance.py'
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 ```
+
+`deep-review` generates read-only PR navigation with
+`~/.config/agent-context/scripts/pr-comment-links.py --input <request.json>`.
+The helper validates merge-base-to-head diff lines and emits separate candidate
+comment links and full-SHA pinned source links. Generated GitHub fragments are
+labelled diff-validated but UI-unverified unless actual rendered-target evidence
+is supplied.
 
 ## Common operations
 
