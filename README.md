@@ -60,7 +60,7 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
-| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, optional Jarvis (clone + `make install` + launchd agents). Env vars: `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_SCHEDULES=1` |
+| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1` |
 
 ## Jumping into a repo with an AI harness (`dev`)
 
@@ -187,26 +187,144 @@ python3 scripts/agent-explainer.py \
 }
 ```
 
+The legacy fields above remain supported in their existing fixed order:
+`paragraphs`, `steps`, `flow`, `code`, then `comments`. For explanations whose
+structure matters, use ordered `blocks` instead:
+
+```json
+{
+  "title": "Why validation changes the outcome",
+  "summary": "Validate the candidate before replacing the stored value.",
+  "sections": [
+    {
+      "heading": "One input shows the difference",
+      "blocks": [
+        {
+          "type": "callout",
+          "title": "Key rule",
+          "text": "A rejected candidate must leave the stored value unchanged."
+        },
+        {
+          "type": "comparison",
+          "left": {
+            "label": "Expected",
+            "value": "old → old",
+            "text": "Validation fails before persistence."
+          },
+          "right": {
+            "label": "Actual",
+            "value": "old → empty",
+            "text": "The old value is cleared before validation finishes."
+          },
+          "caption": "The state change, not the validation message, is the bug."
+        },
+        {
+          "type": "diagram",
+          "source": "flowchart TD\n  A[Candidate] --> B{Valid?}\n  B -->|Yes| C[Save]\n  B -->|No| D[Keep existing value]",
+          "caption": "Validation controls whether storage changes.",
+          "text_alt": "A candidate is validated. Valid input is saved; invalid input leaves the existing value unchanged."
+        },
+        {
+          "type": "details",
+          "summary": "Supporting source trace",
+          "blocks": [
+            {"type": "text", "text": "The parser calls validation before the storage adapter."},
+            {"type": "steps", "items": ["Parse the candidate.", "Validate it.", "Save only when valid."]}
+          ]
+        },
+        {
+          "type": "comments",
+          "items": ["Can we validate before replacing the stored value?"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Supported block shapes are deliberately small:
+
+| Type | Fields |
+|---|---|
+| `text` | `text` |
+| `steps` | nonempty `items` list |
+| `code` | `code` |
+| `comments` | nonempty `items` list; each item gets a copy control |
+| `callout` | `title`, `text` |
+| `comparison` | `left` and `right`, each with `label`, `value`, optional `text`; optional `caption` |
+| `diagram` | Mermaid `source`, visible `caption`, meaningful `text_alt` |
+| `details` | `summary` and nonempty nested `blocks`; nested diagrams/details are rejected |
+
+A section may use `blocks` or any legacy content field, never both—even if one
+side is empty. Ambiguous mixtures fail rather than silently dropping or
+reordering content. Section-level `heading`, `severity` and `location` work in
+both formats. In review mode, a finding's required pasteable comment must be a
+top-level `comments` field or direct `comments` block so it remains easy to
+find; a comment hidden inside `details` does not satisfy that requirement.
+
+Use comparisons when the important point is what differs, diagrams when
+relationships, ordering, branches or state transitions matter, worked examples
+when a reader needs to follow one concrete input, and details when supporting
+evidence would interrupt the main explanation. These are choices, not a
+checklist; a short paragraph remains appropriate for a simple point.
+
+#### Mermaid setup and safety
+
+The renderer uses pinned local dependencies in `scripts/mermaid/`:
+`@mermaid-js/mermaid-cli` plus its matching Puppeteer browser. The normal
+bootstrap installs them with:
+
+```bash
+npm ci --prefix scripts/mermaid
+```
+
+`setup-dev-env.sh` runs that command automatically; set `SKIP_MERMAID=1` only
+when intentionally skipping diagram support. Installation requires Node
+22.13 or newer and network access to download npm packages and Puppeteer's
+pinned headless Chrome. The repository bootstrap installs current Node through
+Homebrew on macOS. Mermaid CLI/Puppeteer also support their documented Linux
+platforms, but this repository's full bootstrap remains macOS-oriented. No
+global npm install is used.
+
+Normal artifact generation invokes
+`scripts/mermaid/node_modules/.bin/mmdc` directly and performs no package,
+browser, font or remote-asset download. The generated HTML contains sanitized
+static SVG and works offline; it does not load Mermaid in the browser.
+The headless browser runs with background networking disabled and an
+unreachable loopback proxy so diagram content cannot fetch remote resources
+during rendering.
+Generated SVG is parsed independently and rejects scripts, event handlers,
+foreign/unsupported elements, unsafe links, and external resource references.
+The Mermaid source is escaped and retained in an expandable section, while the
+caption and text alternative remain available to readers and assistive
+technology. Mermaid initialization directives and configuration frontmatter are
+both rejected so source content cannot override renderer policy.
+
 Pages live at `~/.local/share/agent-explainers/<repo-key>/<topic>.html`, outside
 Git; worktrees share their repository identity. Reusing a topic updates the page.
-The renderer escapes input and uses inline SVG/CSS; the only script is a static
-copy-to-clipboard helper for `comments` blocks (no content is ever interpolated
-into it — the CSP header pins it by sha256 hash), and there are no fonts or
-other network resources. Colors follow the system light/dark theme and reset to
-the light palette when printing. Each page stamps its own UTC generation time.
-Unknown JSON keys are rejected before anything is written. Sources and bare
-https URLs in text are clickable links, not fetched content; `http://` or
-credentialed URLs stay plain text. Metadata values may be
+The renderer validates the complete input, renders every diagram, sanitizes all
+SVG and constructs the complete HTML before atomically replacing the
+destination. Missing tooling or browser assets, invalid Mermaid syntax,
+unsupported/unsafe SVG, unknown JSON keys and invalid schema all fail
+explicitly; an existing artifact remains unchanged. The only browser-side
+script is a static copy-to-clipboard helper (no content is interpolated into it,
+and the CSP pins it by sha256 hash). There are no remote fonts or assets.
+Colors follow the system light/dark theme and reset to the light palette when
+printing. Closed details are forced open in printed output so evidence is not
+lost. Each page stamps its own UTC generation time. Sources and bare https URLs
+in text are clickable links, not fetched content; `http://` or credentialed
+URLs stay plain text. Metadata values may be
 `{"text": "...", "url": "https://..."}` to render as a hyperlink (useful for
 pinned commit SHAs); a `Reviewed` date key is optional — the generation stamp
 usually replaces it. Sections may carry a `location` (plain `path:line` string
 or `{"text", "url"}`) shown muted under the heading. With top-level
 `"kind": "review"`, every `Finding ...` section needs a `severity` (blocker |
 should-fix | nit | question, rendered as a colored badge), a `location` and at
-least one `comments` entry, some heading must contain `Verdict`, findings are
+least one direct legacy `comments` entry or `comments` block, some heading must
+contain `Verdict`, findings are
 indexed under the summary with anchor links, and leftover
 `<sha>`/`<number>`/`<owner>`/`<repo>` placeholders in fill-in slots fail the
-render (quoting them inside paragraphs, code or comments is fine). Use
+render (quoting them inside content blocks is fine). Use
 synthetic examples, not credentials or unnecessary production data. A failed
 browser open reports the saved path, not a false success.
 

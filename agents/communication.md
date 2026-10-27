@@ -37,11 +37,22 @@ config README for the input format. It saves outside Git under
 `~/.local/share/agent-explainers/<repo>/<topic>.html` and opens the local file.
 Use `--no-open` when requested or in unattended/headless work.
 
-Include the main point, a useful flow, a concrete example and source references.
-Review pages should identify the PR and pinned revision and explain each finding
-separately from its pasteable comment. Reuse the topic filename for updates.
-Use synthetic or minimal examples, never credentials or unnecessary personal,
-customer or production data. Do not upload pages or fetch remote scripts/fonts.
-If saving or opening fails, say what failed and provide the saved path if it exists;
-do not claim success. If this helper is unavailable, give the explanation and
-diagram in chat rather than silently installing a new tool or losing the answer.
+Structure the page around what makes the mechanism easiest to understand; a
+simple finding can remain a short paragraph. Use a comparison when the important
+point is what differs, a Mermaid diagram when relationships, ordering, branches
+or state transitions matter, a worked example when the reader needs to follow
+one concrete input, and expandable evidence when a source trace would interrupt
+the main explanation. Diagrams should replace explanation effort, not duplicate
+nearby prose or make a small point unnecessarily large. Keep the main conclusion
+and essential limitations visible rather than hiding them in expandable content.
+
+Review pages should identify the PR and pinned revision, keep the primary
+"Comment in PR" location easy to find, and explain each finding separately from
+its pasteable comment. Preserve pinned evidence and distinguish verified facts,
+intended behavior and assumptions; do not describe a proposed fix as implemented.
+Reuse the topic filename for updates. Use synthetic or minimal examples, never
+credentials or unnecessary personal, customer or production data. Do not upload
+pages or fetch remote scripts/fonts. If saving or opening fails, say what failed
+and provide the saved path if it exists; do not claim success. If this helper is
+unavailable, give the explanation and diagram in chat rather than silently
+installing a new tool or losing the answer.

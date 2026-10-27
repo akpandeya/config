@@ -9,6 +9,7 @@ git
 docker
 colima
 uv
+node
 jq
 wget
 curl

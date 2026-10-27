@@ -1,0 +1,14 @@
+{
+  "name": "agent-explainer-mermaid",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned local Mermaid renderer for scripts/agent-explainer.py",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "12.0.0",
+    "puppeteer": "25.16.0"
+  },
+  "allowScripts": {
+    "puppeteer@25.16.0": true
+  }
+}

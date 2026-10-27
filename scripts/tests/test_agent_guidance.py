@@ -344,6 +344,10 @@ class ExplainerTest(unittest.TestCase):
         self.assertIn("severity-should-fix", output)
         self.assertIn('class="location"', output)
         self.assertEqual(output.count('class="copy"'), 1)
+        self.assertIn('class="comparison"', output)
+        self.assertIn('class="callout"', output)
+        self.assertIn('class="supporting"', output)
+        self.assertIn("mermaid-svg", output)
         self.assertIn("Generated ", output)
         self.assertIn("https://github.com/hellofresh/production-planning/pull/5065", output)
         self.assertIn("/changes#diff-", output)
@@ -402,6 +406,232 @@ class ExplainerTest(unittest.TestCase):
             self.assertEqual(explainer.main(), 1)
         self.assertIn("saved file manually", error.getvalue())
         self.assertEqual(len(list(self.home.rglob("review.html"))), 1)
+
+    def block_data(self):
+        return {
+            "title": "Ordered explanation",
+            "summary": "The important relationship is visible.",
+            "sections": [{
+                "heading": "Mechanism",
+                "blocks": [
+                    {"type": "callout", "title": "Key rule",
+                     "text": "Validate before saving."},
+                    {"type": "text", "text": "Start with one concrete input."},
+                    {"type": "comparison",
+                     "left": {"label": "Expected", "value": "accepted",
+                              "text": "The valid value is stored."},
+                     "right": {"label": "Actual", "value": "rejected",
+                               "text": "The old implementation drops it."},
+                     "caption": "The differing outcome is the point."},
+                    {"type": "steps", "items": ["Read input", "Validate", "Store"]},
+                    {"type": "code", "code": "save(validate(value))"},
+                    {"type": "details", "summary": "Evidence",
+                     "blocks": [
+                         {"type": "text", "text": "Trace: parser → validator → store."},
+                         {"type": "steps", "items": ["Parser accepts", "Validator rejects"]},
+                     ]},
+                    {"type": "comments", "items": ["Can we validate before saving?"]},
+                ],
+            }],
+        }
+
+    def test_ordered_blocks_render_in_declared_order(self):
+        output = explainer.render(self.block_data())
+        fragments = [
+            "Key rule", "Start with one concrete input.", "Expected", "Actual",
+            "Read input", "save(validate(value))", "Evidence",
+            "Can we validate before saving?",
+        ]
+        positions = [output.index(fragment) for fragment in fragments]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('class="callout"', output)
+        self.assertIn('class="comparison"', output)
+        self.assertIn('class="supporting"', output)
+        self.assertEqual(output.count('class="copy"'), 1)
+
+    def test_blocks_reject_ambiguous_or_invalid_input(self):
+        cases = [
+            {"heading": "Mixed", "blocks": [], "paragraphs": []},
+            {"heading": "Unknown", "blocks": [{"type": "video", "url": "x"}]},
+            {"heading": "Extra", "blocks": [{"type": "text", "text": "x", "html": "<b>x</b>"}]},
+            {"heading": "Comparison", "blocks": [{
+                "type": "comparison", "left": {"label": "Before", "value": "x"},
+                "right": {"label": "After"},
+            }]},
+            {"heading": "Details", "blocks": [{
+                "type": "details", "summary": "Nested", "blocks": [{
+                    "type": "details", "summary": "Too deep",
+                    "blocks": [{"type": "text", "text": "x"}],
+                }],
+            }]},
+            {"heading": "Hidden diagram", "blocks": [{
+                "type": "details", "summary": "Evidence", "blocks": [{
+                    "type": "diagram", "source": "flowchart TD\nA-->B",
+                    "caption": "Flow", "text_alt": "A leads to B.",
+                }],
+            }]},
+        ]
+        for section in cases:
+            with self.subTest(section=section["heading"]), self.assertRaises(ValueError):
+                explainer.render({
+                    "title": "Invalid", "summary": "Invalid", "sections": [section],
+                })
+
+    def test_review_finding_accepts_direct_comment_block(self):
+        data = self.review_data()
+        data["sections"][1].pop("paragraphs")
+        data["sections"][1].pop("comments")
+        data["sections"][1]["blocks"] = [
+            {"type": "text", "text": "Expected differs from actual."},
+            {"type": "comments", "items": ["Please preserve the valid value."]},
+        ]
+        output = explainer.render(data)
+        self.assertIn("Please preserve the valid value.", output)
+        data["sections"][1]["blocks"] = [{
+            "type": "details", "summary": "Hidden", "blocks": [
+                {"type": "comments", "items": ["Not a primary comment"]},
+            ],
+        }]
+        with self.assertRaises(ValueError):
+            explainer.render(data)
+
+    def test_real_mermaid_rendering_is_static_accessible_and_namespaced(self):
+        if not explainer.MERMAID_CLI.is_file():
+            self.skipTest("local Mermaid CLI is not installed")
+        data = {
+            "title": "Diagram", "summary": "Static diagram",
+            "sections": [{"heading": "Flow", "blocks": [
+                {"type": "diagram",
+                 "source": "flowchart TD\n A[Input] --> B{Valid?}\n B -->|Yes| C[Save]",
+                 "caption": "Validation controls whether input is saved.",
+                 "text_alt": "Input reaches a validation decision; valid input is saved."},
+                {"type": "diagram",
+                 "source": "sequenceDiagram\n Client->>Service: Request\n Service-->>Client: Response",
+                 "caption": "A client request receives a service response.",
+                 "text_alt": "The client sends a request and the service returns a response."},
+            ]}],
+        }
+        output = explainer.render(data)
+        self.assertEqual(len(re.findall(r'class="[^"]*mermaid-svg[^"]*"', output)), 2)
+        self.assertIn("diagram-0-0-title diagram-0-0-description", output)
+        self.assertIn("diagram-0-1-title diagram-0-1-description", output)
+        self.assertIn("<summary>Mermaid source</summary>", output)
+        self.assertIn("flowchart TD", output)
+        self.assertNotIn("<foreignObject", output)
+        self.assertNotIn("http://www.w3.org/1999/xhtml", output)
+
+    def test_mermaid_failures_are_explicit(self):
+        block = {
+            "title": "Diagram", "summary": "Static diagram",
+            "sections": [{"heading": "Flow", "blocks": [{
+                "type": "diagram", "source": "flowchart TD\nA-->B",
+                "caption": "A leads to B.", "text_alt": "Node A leads to node B.",
+            }]}],
+        }
+        with patch.object(explainer, "MERMAID_CLI", self.base / "missing-mmdc"):
+            with self.assertRaisesRegex(ValueError, "not installed"):
+                explainer.render(block)
+        directive = json.loads(json.dumps(block))
+        directive["sections"][0]["blocks"][0]["source"] = (
+            "%%{init: {'securityLevel': 'loose'}}%%\nflowchart TD\nA-->B"
+        )
+        with self.assertRaisesRegex(ValueError, "not supported"):
+            explainer.render(directive)
+        frontmatter = json.loads(json.dumps(block))
+        frontmatter["sections"][0]["blocks"][0]["source"] = (
+            "---\nconfig:\n  securityLevel: loose\n---\nflowchart TD\nA-->B"
+        )
+        with self.assertRaisesRegex(ValueError, "frontmatter"):
+            explainer.render(frontmatter)
+        if explainer.MERMAID_CLI.is_file():
+            invalid = json.loads(json.dumps(block))
+            invalid["sections"][0]["blocks"][0]["source"] = "flowchart TD\nA --"
+            with self.assertRaisesRegex(ValueError, "rendering failed"):
+                explainer.render(invalid)
+
+    def test_mermaid_browser_is_configured_without_network_access(self):
+        def fake_run(command, **_kwargs):
+            puppeteer_path = Path(command[command.index("--puppeteerConfigFile") + 1])
+            config = json.loads(puppeteer_path.read_text())
+            self.assertIn("--disable-background-networking", config["args"])
+            self.assertIn("--proxy-server=http://127.0.0.1:9", config["args"])
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0,0 L1,1"/></svg>'
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(explainer, "MERMAID_CLI", Path(sys.executable)), \
+                patch.object(explainer.subprocess, "run", side_effect=fake_run):
+            output = explainer.render_mermaid(
+                "flowchart TD\nA-->B", "Caption", "A leads to B.", "diagram",
+            )
+        self.assertIn("A leads to B.", output)
+
+    def test_svg_sanitizer_rejects_active_or_external_content(self):
+        unsafe = [
+            '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect onload="alert(1)"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.org/x"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><style>@import "https://example.org/x";</style><rect/></svg>',
+            '<html><body>not svg</body></html>',
+            '<svg xmlns="http://www.w3.org/2000/svg">',
+        ]
+        for svg in unsafe:
+            with self.subTest(svg=svg), self.assertRaises(ValueError):
+                explainer.sanitize_mermaid_svg(svg, "Caption", "Alternative", "diagram")
+        safe = explainer.sanitize_mermaid_svg(
+            '<svg xmlns="http://www.w3.org/2000/svg"><defs><marker id="arrow">'
+            '<path d="M0,0 L1,1"/></marker></defs><path id="edge" d="M0,0 L1,1" '
+            'marker-end="url(#arrow)"/></svg>',
+            "Caption", "Alternative", "diagram",
+        )
+        self.assertIn('marker-end="url(#diagram-arrow)"', safe)
+        self.assertIn('id="diagram-edge"', safe)
+
+    def test_failed_diagram_preserves_existing_artifact(self):
+        path = explainer.save(self.repo, "stable", self.data, self.home)
+        original = path.read_bytes()
+        data = {
+            "title": "Replacement", "summary": "Must not replace",
+            "sections": [{"heading": "Diagram", "blocks": [{
+                "type": "diagram", "source": "flowchart TD\nA-->B",
+                "caption": "A leads to B.", "text_alt": "A leads to B.",
+            }]}],
+        }
+
+        def fail(*_args):
+            raise ValueError("unsafe generated SVG")
+
+        with self.assertRaisesRegex(ValueError, "unsafe generated SVG"):
+            explainer.save(self.repo, "stable", data, self.home, mermaid_renderer=fail)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(list(path.parent.iterdir()), [path])
+        if explainer.MERMAID_CLI.is_file():
+            data["sections"][0]["blocks"][0]["source"] = "flowchart TD\nA --"
+            with self.assertRaisesRegex(ValueError, "rendering failed"):
+                explainer.save(self.repo, "stable", data, self.home)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(path.parent.iterdir()), [path])
+
+    def test_block_styles_cover_accessibility_responsive_theme_and_print(self):
+        output = explainer.render(self.block_data())
+        self.assertIn("summary:focus-visible", output)
+        self.assertIn("@media(max-width:600px)", output)
+        self.assertIn("@media(prefers-color-scheme:dark)", output)
+        self.assertIn("details:not([open])>:not(summary)", output)
+        self.assertIn("grid-template-columns:1fr", output)
+
+    def test_mermaid_dependency_is_local_pinned_and_setup_managed(self):
+        package = json.loads((ROOT / "scripts/mermaid/package.json").read_text())
+        self.assertEqual(package["dependencies"]["@mermaid-js/mermaid-cli"], "12.0.0")
+        self.assertEqual(package["dependencies"]["puppeteer"], "25.16.0")
+        self.assertTrue(package["allowScripts"]["puppeteer@25.16.0"])
+        lock = json.loads((ROOT / "scripts/mermaid/package-lock.json").read_text())
+        self.assertEqual(lock["packages"][""]["dependencies"], package["dependencies"])
+        setup = (ROOT / "setup-dev-env.sh").read_text()
+        self.assertIn('npm ci --prefix "$REPO_DIR/scripts/mermaid"', setup)
+        self.assertNotIn("npx mmdc", setup)
 
 
 FAKE_GH = """#!/usr/bin/env python3

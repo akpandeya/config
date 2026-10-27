@@ -362,7 +362,8 @@ for every finding without waiting for a follow-up request. Define unfamiliar
 terms briefly, and use a small code snippet or diagram where it clarifies the
 mechanism. Scale the length to the point: a naming nit needs less than a race
 condition. Distinguish an implemented bug from a design gap, open question or
-preference. Never label the explanation by the reader's seniority.
+preference. Never label the explanation by the reader's seniority. Do not
+present a proposed fix or intended behavior as already implemented.
 
 The label is per finding, so a review that only surfaces naming nits or
 genuine questions doesn't force a request-changes verdict. Group
@@ -375,26 +376,45 @@ the shared communication policy, under a stable `pr-<number>` topic for that
 repository. Use the review template below for the input JSON so every review
 artifact has the same shape. Include the PR URL, pinned revision, overview,
 each finding and its explanation, verdict and coverage gaps. Keep pasteable
-comments distinct from explanations there too: put each finding's copy-pasteable
-comment text in the section's `comments` list (the renderer shows them as
-copy-to-clipboard blocks), and keep the explanation in `paragraphs`. Make every
-reference clickable: give pinned SHAs as full commit or compare URLs (metadata
-values accept `{"text": "...", "url": "https://..."}`, and bare https URLs in
-paragraphs are auto-linked), and list all stacked PRs and key files under
-`sources`. Every `Finding ...` section carries a `severity` (blocker |
+comments distinct from explanations there too: put each finding's
+copy-pasteable text in a direct `comments` block (the renderer shows it as a
+copy-to-clipboard block), never inside the explanation or expandable evidence.
+
+Choose blocks for the explanation rather than filling every available type:
+
+- Use a `comparison` when the important point is expected versus actual,
+  before versus after, or another concrete difference.
+- Use a Mermaid `diagram` when relationships, interactions, ordering, branches
+  or state transitions are easier to see than reconstruct from prose.
+- Use a short `text` block as a worked example when the reader needs to follow
+  one concrete input through the behavior.
+- Use `details` for source traces and secondary evidence that would interrupt
+  the main explanation. Keep the conclusion, consequence, coverage boundary
+  and other information required to understand the finding visible.
+
+A simple finding can remain one short text block plus its comment. A diagram
+must reduce reading work rather than repeat nearby prose or inflate a small
+finding. Every diagram needs a useful caption and a text alternative that
+explains the relationship without relying on the picture.
+
+Make every reference clickable: give pinned SHAs as full commit or compare URLs
+(metadata values accept `{"text": "...", "url": "https://..."}`, and bare
+https URLs in text blocks are auto-linked), and list all stacked PRs and key
+files under `sources`. Every `Finding ...` section carries a `severity` (blocker |
 should-fix | nit | question — rendered as a colored badge) and a `location`:
 use `{"text": "Comment in PR: ... - Diff-validated, UI-unverified", "url":
 "https://..."}` for a generated candidate, or the same shape with
 `Rendered-verified` after actual UI inspection. Include the PR, path, live line
 and side in the text. Put `Pinned source: ...` and its bare HTTPS file/line URL
-in the finding's `paragraphs`, and add a labelled entry under `sources`. Put
-the recorded live snapshot and what was actually verified in `metadata` or
-`paragraphs`. For an unavailable target, use a plain-text `location` such as
+in the finding's visible explanation or expandable evidence, and add a labelled
+entry under `sources`; it is evidence, not a replacement for the primary
+comment location. Put the recorded live snapshot and what was actually verified
+in `metadata` or a text block. For an unavailable target, use a plain-text `location` such as
 `Comment in PR: unavailable - live diff correspondence was ambiguous`; retain
-the pinned paragraph, sources and pasteable comment. Use only these existing
-renderer fields, not new `comment_url`/`evidence`/`side`/`verification_status`
-fields.
-Paragraphs are plain text with auto-linked URLs, not Markdown links.
+the pinned evidence, sources and pasteable comment. Do not invent
+`comment_url`/`side`/`verification_status` fields; keep navigation in
+`location`, evidence in content blocks and the source list.
+Text is plain text with auto-linked URLs, not Markdown links.
 Section order is fixed as in the template; the headings of the non-finding
 sections are free text — the
 renderer only requires the `Finding` prefix on finding sections and one heading
@@ -423,24 +443,61 @@ links. Fill live and pinned line numbers separately if they differ.
   "summary": "One paragraph: verdict-flavored overview for someone who reads nothing else.",
   "sections": [
     {"heading": "What changed since last review",
-     "paragraphs": ["re-reviews only: new commits since the previous review, which prior findings they fix or leave open"]},
+     "blocks": [
+       {"type": "text",
+        "text": "re-reviews only: new commits since the previous review, which prior findings they fix or leave open"}
+     ]},
     {"heading": "How this works (assembled stack)",
-     "paragraphs": ["problem + main flow, stack-relative if stacked"],
-     "flow": ["step", "step", "step"]},
+     "blocks": [
+       {"type": "text", "text": "problem + main flow, stack-relative if stacked"},
+       {"type": "diagram",
+        "source": "flowchart LR\n  A[Input] --> B[Changed behavior]\n  B --> C[Downstream outcome]",
+        "caption": "The changed behavior connects the input to its downstream outcome.",
+        "text_alt": "Input reaches the changed behavior, which produces the downstream outcome."}
+     ]},
     {"heading": "Prior findings and concerns - status",
-     "paragraphs": ["per prior point: fixed / accepted / deferred / unresolved, with evidence"]},
+     "blocks": [
+       {"type": "text",
+        "text": "per prior point: fixed / accepted / deferred / unresolved, with evidence"}
+     ]},
     {"heading": "Finding N (severity, PR): short title",
      "severity": "blocker | should-fix | nit | question",
      "location": {"text": "Comment in PR: #<number> - path/to/file.ext:<line> (RIGHT) - Diff-validated, UI-unverified",
                   "url": "https://github.com/<owner>/<repo>/pull/<number>/changes#diff-67d508e772e0496a6cd4e7c39fbe3e5658c6efbd8343abf45b2ccdbf962c1ce3R<line>"},
-     "paragraphs": ["Verification: Git merge base, complete diff, hunk, path, RIGHT line and reviewed-to-live correspondence were checked; the rendered GitHub fragment was not inspected.",
-                    "Pinned source: path/to/file.ext:<line> at reviewed head - https://github.com/<owner>/<repo>/blob/<head>/path/to/file.ext#L<line>",
-                    "Why this matters: context, expected vs actual, consequence, fix direction"],
-     "comments": ["exactly the copy-pasteable comment text"]},
+     "blocks": [
+       {"type": "callout",
+        "title": "Rule or consequence that matters",
+        "text": "State the key invariant, assumption or user-visible consequence."},
+       {"type": "text",
+        "text": "Verification: Git merge base, complete diff, hunk, path, RIGHT line and reviewed-to-live correspondence were checked; the rendered GitHub fragment was not inspected."},
+       {"type": "comparison",
+        "left": {"label": "Expected", "value": "required outcome",
+                 "text": "What should happen for one concrete input."},
+        "right": {"label": "Reviewed behavior", "value": "observed outcome",
+                  "text": "What the pinned code does and what changes downstream."},
+        "caption": "State whether this is a verified implementation bug, design gap, assumption or open question."},
+       {"type": "text",
+        "text": "Consequence and fix direction. Describe required behavior as a proposal unless the reviewed code already implements it."},
+       {"type": "details",
+        "summary": "Evidence and pinned source",
+        "blocks": [
+          {"type": "text",
+           "text": "Pinned source: path/to/file.ext:<line> at reviewed head - https://github.com/<owner>/<repo>/blob/<head>/path/to/file.ext#L<line>"},
+          {"type": "steps",
+           "items": ["source-trace step", "next verified step", "downstream effect or coverage boundary"]}
+        ]},
+       {"type": "comments", "items": ["exactly the copy-pasteable comment text"]}
+     ]},
     {"heading": "Verified claims (checked, not assumed)",
-     "paragraphs": ["what was verified against the pinned SHAs; settled points not re-raised"]},
+     "blocks": [
+       {"type": "text",
+        "text": "what was verified against the pinned SHAs; settled points not re-raised"}
+     ]},
     {"heading": "Verdict and coverage",
-     "paragraphs": ["the explicit verdict + one or two sentences; what was checked, what was not"]}
+     "blocks": [
+       {"type": "text",
+        "text": "the explicit verdict + one or two sentences; what was checked, what was not"}
+     ]}
   ],
   "metadata": {
     "PR": {"text": "#<number>", "url": "https://github.com/<owner>/<repo>/pull/<number>"},

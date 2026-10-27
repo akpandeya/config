@@ -355,6 +355,20 @@ if [ -f "$HOME/.gemini/antigravity-cli/scratch/package.json" ]; then
     fi
 fi
 
+# Pinned local Mermaid renderer for scripts/agent-explainer.py. npm ci is an
+# explicit setup step: Puppeteer's approved postinstall downloads the matching
+# headless Chrome once, while normal explanation generation uses only these
+# installed local files and never fetches packages or browsers.
+if [ "${SKIP_MERMAID:-0}" = "1" ]; then
+    echo "SKIP_MERMAID=1 — skipping agent explainer Mermaid dependencies."
+elif [ "$DRY_RUN" = "1" ]; then
+    echo "Would run: npm ci --prefix $REPO_DIR/scripts/mermaid"
+else
+    echo "=== Installing agent explainer Mermaid dependencies ==="
+    npm ci --prefix "$REPO_DIR/scripts/mermaid" --no-audit --no-fund
+    echo "✓ Mermaid CLI + pinned headless Chrome installed for agent-explainer.py"
+fi
+
 
 # Antigravity personal-skills plugin setup
 if [ "$DRY_RUN" = "1" ]; then

@@ -141,3 +141,4 @@ dmypy.json
 # Neovim
 nvim/lazy-lock.json
 /gemini/node_modules/
+/scripts/mermaid/node_modules/
