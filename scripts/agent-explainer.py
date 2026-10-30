@@ -78,6 +78,18 @@ from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+OVERLAY_PATH = SCRIPT_DIR / "artifact-overlay.js"
+
+
+def load_overlay():
+    """Overlay JS to embed in generated artifacts; missing file fails closed."""
+    try:
+        return OVERLAY_PATH.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"cannot read overlay script {OVERLAY_PATH}: {error}") from error
+
+
 def slug(value):
     value = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip(".-")
     return value[:100] or "repository"
@@ -1048,7 +1060,7 @@ def direct_comments(section):
     return text_list(section.get("comments", []), "comments")
 
 
-def render(data, mermaid_renderer=None):
+def render(data, mermaid_renderer=None, overlay=True, generator="agent-explainer"):
     if mermaid_renderer is None:
         mermaid_renderer = render_mermaid
     if not isinstance(data, dict):
@@ -1178,11 +1190,28 @@ def render(data, mermaid_renderer=None):
                 f"citation [[{number}]] in {field_name} does not match any source (1..{len(sources)})")
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     script_hash = base64.b64encode(hashlib.sha256(COPY_SCRIPT.encode("utf-8")).digest()).decode("ascii")
+    overlay_tag = ""
+    if overlay:
+        overlay_source = load_overlay()
+        overlay_hash = base64.b64encode(hashlib.sha256(overlay_source.encode("utf-8")).digest()).decode("ascii")
+        csp = (
+            f"default-src 'none'; style-src 'unsafe-inline'; "
+            f"script-src 'sha256-{script_hash}' 'sha256-{overlay_hash}'; "
+            f"connect-src http://127.0.0.1:8787 http://localhost:8787; "
+            f"base-uri 'none'; form-action 'none'"
+        )
+        overlay_tag = f"<script>{overlay_source}</script>"
+    else:
+        csp = (
+            f"default-src 'none'; style-src 'unsafe-inline'; "
+            f"script-src 'sha256-{script_hash}'; base-uri 'none'; form-action 'none'"
+        )
+    generator_text = html.escape(require_text(generator, "generator"))
     html_output = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{script_hash}'; base-uri 'none'; form-action 'none'">
-<meta name="referrer" content="no-referrer"><title>{title}</title>
+<meta http-equiv="Content-Security-Policy" content="{csp}">
+<meta name="referrer" content="no-referrer"><meta name="agent-generator" content="{generator_text}"><title>{title}</title>
 <style>
 *{{box-sizing:border-box}}
 :root{{color-scheme:light dark;--bg:#f6f7fb;--fg:#1b2340;--muted:#5a6478;--border:#d9deea;--pre-bg:#e9edf5;--accent:#4f46e5;--link:#4338ca;--box-bg:#eef2ff;--box-border:#c7d2fe;--btn-bg:#ffffff;--btn-border:#9aa4bb;--btn-fg:#1b2340;--good:#15803d;--good-bg:#ecfdf5;--bad:#b91c1c;--bad-bg:#fef2f2;--diagram-bg:#ffffff;--chart-grid:#e5e9f2;--chart-baseline:#9aa4bb;--chart-text:#5a6478;--chart-title:#1b2340;--chart-1:#4f46e5;--chart-2:#0d9488;--chart-3:#d97706;--chart-4:#e11d48;--chart-5:#7c3aed}}
@@ -1235,7 +1264,7 @@ sup.cite a{{color:var(--accent);text-decoration:none;font-weight:600}} sup.cite 
 </style></head><body><main><h1>{title}</h1><p class="meta">{meta}</p>
 <p class="meta generated">Generated {generated} by agent-explainer.py</p>
 <p class="summary">{summary}</p>{index}{''.join(body)}
-<script>{COPY_SCRIPT}</script></main></body></html>
+<script>{COPY_SCRIPT}</script>{overlay_tag}</main></body></html>
 """
     for number in sorted({number for number, _ in citations}):
         html_output = html_output.replace(
@@ -1246,10 +1275,10 @@ sup.cite a{{color:var(--accent);text-decoration:none;font-weight:600}} sup.cite 
     return html_output
 
 
-def save(repo, topic, data, home, mermaid_renderer=None):
+def save(repo, topic, data, home, mermaid_renderer=None, overlay=True, generator="agent-explainer"):
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}", topic):
         raise ValueError("topic must be a stable slug of letters, numbers, underscores or hyphens")
-    content = render(data, mermaid_renderer)
+    content = render(data, mermaid_renderer, overlay=overlay, generator=generator)
     root = home / ".local/share/agent-explainers"
     directory = root / repository_key(repo)
     if directory.resolve().is_relative_to(repo.resolve()):
@@ -1281,9 +1310,14 @@ def main():
     parser.add_argument("--topic", required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--no-overlay", action="store_true",
+                        help="omit the comment feedback overlay from the generated artifact")
+    parser.add_argument("--generator", default="agent-explainer",
+                        help="harness recorded in the agent-generator meta tag")
     args = parser.parse_args()
     try:
-        path = save(args.repo.resolve(), args.topic, json.loads(args.input.read_text()), Path.home())
+        path = save(args.repo.resolve(), args.topic, json.loads(args.input.read_text()), Path.home(),
+                    overlay=not args.no_overlay, generator=args.generator)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Explanation not saved: {error}", file=sys.stderr)
         return 1
