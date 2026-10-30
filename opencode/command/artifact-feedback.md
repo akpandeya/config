@@ -1,0 +1,1 @@
+../../../atelier/opencode/command/artifact-feedback.md
