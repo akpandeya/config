@@ -5,7 +5,6 @@ description: >-
   decomposed issue (the visible plan of record), with manifest + task files saved
   for drivers. The decomposer harness and model are chosen by the caller; defaults
   to Opus with extended thinking in Claude Code. Honors a verbatim agent-tasks spec
-  (legacy agy-tasks markers are accepted too)
   in the issue body.
   Usage: /issue-decompose <owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>] [--dry-run]
 allowed-tools: Bash, Read, Write, Agent
@@ -16,7 +15,7 @@ Decompose a GitHub issue into small, atomic implementation tasks that can each b
 by any implementer harness. Each task is filed as a native sub-issue of the decomposed issue — the
 sub-issue body is the task spec and the plan you can review on GitHub before anything runs. Driver
 inputs (manifest + task files) are saved to
-`${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}}/<slug>/`
+`${AGENT_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}/<slug>/`
 (harness-neutral XDG data home, same convention as nvim's py-scratch/sql-scratch).
 
 Run `/epic-run` to decompose, implement and review in one go. Run this skill alone only to re-decompose
@@ -29,7 +28,7 @@ or to inspect the task list.
 Example: `akpandeya/party-planner 72 DECOMPOSER=claude:opus`
 
 - `REPO`, `ISSUE_NUM`, and `SLUG` = owner + "-" + repo name + "-issue-" + issue number.
-- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}}/$SLUG`.
+- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}/$SLUG`.
 - `DECOMPOSER` defaults to `claude:opus` when absent.
 - `--dry-run`: run the decomposer, then print the sub-issues that would be filed
   (titles, `blockedBy`, target parent) and stop. Create nothing on GitHub; leave
@@ -83,8 +82,7 @@ You are decomposing GitHub issue into atomic implementation tasks.
 **Issue:** Run `gh issue view $ISSUE_NUM --repo $REPO --json title,body,labels` and read the full output.
 
 **FIRST, check for a verbatim task spec.** Inspect the issue body. If it contains the marker
-`<!-- agent-decompose: verbatim -->` or an `## agent-tasks` heading, you are in **VERBATIM MODE**
-(the legacy markers `<!-- agy-decompose: verbatim -->` and `## agy-tasks` count too): the author
+`<!-- agent-decompose: verbatim -->` or an `## agent-tasks` heading, you are in **VERBATIM MODE**: the author
 has already decomposed the work, and you MUST NOT re-derive, split, merge, reorder, drop or invent tasks.
 Transcribe each task block **1:1** into one task file, preserving the author's boundaries exactly. Each
 task block looks like:
