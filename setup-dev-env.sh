@@ -245,6 +245,7 @@ echo "=== Setting up git configuration ==="
 echo
 
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ATELIER_DIR="$( cd "$REPO_DIR/.." && pwd )/atelier"
 
 if [ "$DRY_RUN" = "1" ]; then
     echo "Would run: $REPO_DIR/git/setup.sh (dry-run mode not supported by that script — skipped)"
@@ -355,17 +356,19 @@ if [ -f "$HOME/.gemini/antigravity-cli/scratch/package.json" ]; then
     fi
 fi
 
-# Pinned local Mermaid renderer for scripts/agent-explainer.py. npm ci is an
+# Pinned local Mermaid renderer for the atelier repo's agent-explainer.py (the
+# artifact toolchain lives there; see $ATELIER_DIR). npm ci is an
 # explicit setup step: Puppeteer's approved postinstall downloads the matching
 # headless Chrome once, while normal explanation generation uses only these
 # installed local files and never fetches packages or browsers.
 if [ "${SKIP_MERMAID:-0}" = "1" ]; then
     echo "SKIP_MERMAID=1 — skipping agent explainer Mermaid dependencies."
 elif [ "$DRY_RUN" = "1" ]; then
-    echo "Would run: npm ci --prefix $REPO_DIR/scripts/mermaid"
+    echo "Would run: npm ci --prefix $ATELIER_DIR/scripts/mermaid"
 else
+    [ -d "$ATELIER_DIR" ] || { echo "atelier repo missing next to config ($ATELIER_DIR)"; exit 1; }
     echo "=== Installing agent explainer Mermaid dependencies ==="
-    npm ci --prefix "$REPO_DIR/scripts/mermaid" --no-audit --no-fund
+    npm ci --prefix "$ATELIER_DIR/scripts/mermaid" --no-audit --no-fund
     echo "✓ Mermaid CLI + pinned headless Chrome installed for agent-explainer.py"
 fi
 
