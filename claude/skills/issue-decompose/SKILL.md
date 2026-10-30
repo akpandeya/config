@@ -16,7 +16,8 @@ Decompose a GitHub issue into small, atomic implementation tasks that can each b
 by any implementer harness. Each task is filed as a native sub-issue of the decomposed issue — the
 sub-issue body is the task spec and the plan you can review on GitHub before anything runs. Driver
 inputs (manifest + task files) are saved to
-`${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.claude/agent-prompts}}/<slug>/`.
+`${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}}/<slug>/`
+(harness-neutral XDG data home, same convention as nvim's py-scratch/sql-scratch).
 
 Run `/epic-run` to decompose, implement and review in one go. Run this skill alone only to re-decompose
 or to inspect the task list.
@@ -28,7 +29,7 @@ or to inspect the task list.
 Example: `akpandeya/party-planner 72 DECOMPOSER=claude:opus`
 
 - `REPO`, `ISSUE_NUM`, and `SLUG` = owner + "-" + repo name + "-issue-" + issue number.
-- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.claude/agent-prompts}}/$SLUG`.
+- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}}/$SLUG`.
 - `DECOMPOSER` defaults to `claude:opus` when absent.
 - `--dry-run`: run the decomposer, then print the sub-issues that would be filed
   (titles, `blockedBy`, target parent) and stop. Create nothing on GitHub; leave
