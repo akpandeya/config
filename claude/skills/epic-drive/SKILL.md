@@ -118,7 +118,7 @@ worktree. The loop is mostly waiting, not tokens.
 Save each implementer's output to `$PROMPT_DIR/logs/<task.id>.<harness>.log` and read only its
 tail. Ask a same-harness subagent to end with a summary of at most 40 lines.
 
-**Two coordination guards, established before any task runs:**
+**Three coordination guards, established before any task runs:**
 
 1. **The lock.** Acquire one persistent directory for the whole invocation:
    ```bash
@@ -127,7 +127,15 @@ tail. Ask a same-harness subagent to end with a summary of at most 40 lines.
    Exit code 9 means another driver may own it: abort rather than deleting it. Record the
    session identity in it. Release only your own lock on completion or a clean halt. After a
    crash, inspect ownership and ask before removing a stale lock.
-2. **Cool-down at the front, not the back.** A trailing sleep is skippable at zero cost. Fused
+2. **The repo lock.** The prompt-dir lock serializes drivers of the same epic; this one
+   serializes drivers of the same checkout (another epic-drive, issue-ship, ship.py):
+   ```bash
+   ~/.config/agent-context/scripts/repo-lock.sh acquire "$REPO_PATH" "epic-drive $REPO#$ISSUE_NUM"
+   ```
+   Exit 9 means another driver owns the checkout: abort and show the printed owner. Keep the
+   printed `TOKEN=`; release with it on completion or a clean halt. Steal only after inspecting
+   the owner (`--force`) — a live holder means real concurrent work, not a stale lock.
+3. **Cool-down at the front, not the back.** A trailing sleep is skippable at zero cost. Fused
    to the head of the next task's work it is not (step a).
 
 **Sequentiality:** exactly one implementer may be running at a time, and no command for task N+1
@@ -171,6 +179,10 @@ cd <repoPath> && git checkout <base> && git pull --ff-only && git checkout -b <t
 The cool-down is a minimum inter-task-start interval, not a fixed tax. A task that already took
 longer than `COOLDOWN` pays nothing. The anchor is always one field: the previous task's `finishedAt`. That bounds requests per hour, which is what usage limits
 measure.
+
+Before the sync, assert the checkout is what this run left behind: `git status --porcelain`
+empty and HEAD on the base branch. Anything else at a task boundary is foreign work — halt and
+report; never commit, stash or discard changes this run did not create.
 
 Set `status: "running"`, increment `attempts`, write `startedAt` **before** launching the
 implementer.
@@ -306,8 +318,11 @@ to `epic-review`.
 | merge conflict | `mergeStateStatus: DIRTY` | halt, request approved recovery |
 | **usage limit** | log matches `usage limit\|rate limit\|resets at\|429` | **not a failure**. Parse the reset time, sleep until it + 120 s, do not increment `attempts`, retry the same task. Exit code 0 is possible on agy, so check the log, not only the exit code |
 | lock held | `mkdir` fails, exit 9 | abort; another driver is live |
+| repo lock held | `repo-lock.sh acquire` exits 9 | abort; show the printed owner. Steal with `--force` only after inspecting it |
+| foreign checkout state | dirty tree or wrong branch at a task boundary | halt; never commit, stash or discard work the run did not create |
 
-"Halt" always means: leave the branch and PR intact, write `lastError`, print a resume line, stop.
+"Halt" always means: leave the branch and PR intact, write `lastError`, print a resume line,
+release the repo lock, stop.
 **Never skip a failed task and continue.**
 
 Cap `attempts` at 3 per task.
