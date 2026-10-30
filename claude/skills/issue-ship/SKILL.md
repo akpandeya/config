@@ -24,6 +24,13 @@ gathers context, runs checks and reads log tails. It never pastes whole logs int
 - Resolve `<owner/repo>` and `<issue-number>` from `$ARGUMENTS`. If either is missing, ask —
   under `--headless`, stop instead.
 - Working tree must be clean and on `main`. Stop if it is not; never stash or reset user work.
+- Acquire the repo lock before touching the checkout:
+  `~/.config/agent-context/scripts/repo-lock.sh acquire <repo-path> "issue-ship #<issue>"`.
+  Exit 9 means another driver owns this checkout — stop and relay the printed owner. Keep the
+  printed `TOKEN=`; release with it in step 9 and on every stop path.
+- If at any step the checkout's state is not what this run produced (dirty paths this run did
+  not create, a branch step 3 did not create), stop and report — never commit, stash or discard
+  work this run did not create.
 - Scratch dir: `$SCRATCH/<issue>/` with `logs/`, `issue.md`, `findings-<n>.md`, `summary.md`.
   Use the session scratchpad, not `/tmp`.
 - Never touch signing material, secrets, package/application identity, or user-data keys. Also
@@ -209,6 +216,8 @@ Write `summary.md` in the scratch dir: the stages with harness and model, findin
 round, what each fix changed, and any stop. Write `$SCRATCH/<issue>/result.json` per the
 result contract in step 0.5 and print its path. Then give the user a short report: the PR
 link (if shipped), what was verified, and what was not done.
+
+Release the repo lock: `~/.config/agent-context/scripts/repo-lock.sh release <repo-path> <token>`.
 
 Ask the user one question at the end: whether to make another issue run with the same
 pattern. Never ask this under `--headless`.
