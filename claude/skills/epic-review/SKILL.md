@@ -20,7 +20,8 @@ round with a new reviewer. The review ends when a round changes nothing.
 
 ## Inputs
 
-- `PROMPT_DIR` = `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/<slug>`, where `<slug>` is
+- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}/<slug>`
+  (harness-neutral XDG data home), where `<slug>` is
   owner + "-" + repo + "-issue-" + issue number. Read `manifest.json` from it.
 - `REVIEWER` = `<harness>:<model>`, one of `claude:<alias or id>`, `opencode:<provider/model>` or
   `agy:<model id>`. When called from `epic-run` or `epic-drive` it is already resolved. Ask once only

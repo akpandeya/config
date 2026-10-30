@@ -35,8 +35,9 @@ not set them.
   manifest value when `cooldownSeconds` is set). `cooldownSeconds` in the manifest is used only when the
   caller chose "use manifest value".
 - `SLUG` = owner + "-" + repo-name + "-issue-" + issue-number.
-- `PROMPT_DIR` = `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/$SLUG`. The same directory
-  is used by every harness, so a manifest written by one harness can be driven by another.
+- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}/$SLUG`.
+  Harness-neutral XDG data home, same convention as nvim's py-scratch/sql-scratch. The same
+  directory is used by every harness, so a manifest written by one harness can be driven by another.
 - `RETRY_FAILED` applies only when `--retry-failed` is present.
 
 If `--reviewer` is passed, stop and say that review is no longer part of this skill. Use
@@ -63,7 +64,7 @@ Then stop.
 
 ## Run-all
 
-When called with no epic, list `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/*/manifest.json`,
+When called with no epic, list `${AGENT_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}/*/manifest.json`,
 read each manifest's `repo` and `issue` (not the folder name), sort by `issue`, and skip
 epics whose tasks are all `merged` or `skipped`. Resolve every epic's config before the first
 task. Run one epic at a time, each fully finished before the next starts. A halt stops the
