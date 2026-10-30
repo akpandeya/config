@@ -4,7 +4,8 @@ description: >-
   Decompose a GitHub issue into atomic tasks, filed as native sub-issues of the
   decomposed issue (the visible plan of record), with manifest + task files saved
   for drivers. The decomposer harness and model are chosen by the caller; defaults
-  to Opus with extended thinking in Claude Code. Honors a verbatim agy-tasks spec
+  to Opus with extended thinking in Claude Code. Honors a verbatim agent-tasks spec
+  (legacy agy-tasks markers are accepted too)
   in the issue body.
   Usage: /issue-decompose <owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>] [--dry-run]
 allowed-tools: Bash, Read, Write, Agent
@@ -14,7 +15,8 @@ argument-hint: "<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>] [--dr
 Decompose a GitHub issue into small, atomic implementation tasks that can each be run independently
 by any implementer harness. Each task is filed as a native sub-issue of the decomposed issue — the
 sub-issue body is the task spec and the plan you can review on GitHub before anything runs. Driver
-inputs (manifest + task files) are saved to `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/<slug>/`.
+inputs (manifest + task files) are saved to
+`${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.claude/agent-prompts}}/<slug>/`.
 
 Run `/epic-run` to decompose, implement and review in one go. Run this skill alone only to re-decompose
 or to inspect the task list.
@@ -26,7 +28,7 @@ or to inspect the task list.
 Example: `akpandeya/party-planner 72 DECOMPOSER=claude:opus`
 
 - `REPO`, `ISSUE_NUM`, and `SLUG` = owner + "-" + repo name + "-issue-" + issue number.
-- `PROMPT_DIR` = `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/$SLUG`.
+- `PROMPT_DIR` = `${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.claude/agent-prompts}}/$SLUG`.
 - `DECOMPOSER` defaults to `claude:opus` when absent.
 - `--dry-run`: run the decomposer, then print the sub-issues that would be filed
   (titles, `blockedBy`, target parent) and stop. Create nothing on GitHub; leave
@@ -80,7 +82,8 @@ You are decomposing GitHub issue into atomic implementation tasks.
 **Issue:** Run `gh issue view $ISSUE_NUM --repo $REPO --json title,body,labels` and read the full output.
 
 **FIRST, check for a verbatim task spec.** Inspect the issue body. If it contains the marker
-`<!-- agy-decompose: verbatim -->` or an `## agy-tasks` heading, you are in **VERBATIM MODE**: the author
+`<!-- agent-decompose: verbatim -->` or an `## agent-tasks` heading, you are in **VERBATIM MODE**
+(the legacy markers `<!-- agy-decompose: verbatim -->` and `## agy-tasks` count too): the author
 has already decomposed the work, and you MUST NOT re-derive, split, merge, reorder, drop or invent tasks.
 Transcribe each task block **1:1** into one task file, preserving the author's boundaries exactly. Each
 task block looks like:
@@ -154,13 +157,18 @@ Working dir: <abs repo path>
     {
       "id": "task-01",
       "title": "...",
-      "branch": "agy/issue-<N>-<slug>",
+      "branch": "<type>/<N>-<slug>",
       "blockedBy": [],
       "status": "pending"
     }
   ]
 }
 ```
+
+`type` is `feat`, `fix`, `chore` or `docs` by the task's nature (default `feat`); `N` is the
+decomposed issue's number (the publish step rewrites it to the task's own sub-issue number).
+Branch naming matches issue-ship's `<type>/<issue>-<slug>`, so task branches and single-issue
+branches look alike.
 
 After writing all files, print the task list with titles, file counts and dependency order. Then stop.
 ---
@@ -204,8 +212,8 @@ filing: it is the change-detection record for re-publishes. Never inline multi-l
 bodies on the command line.
 
 **Record immediately.** After each filing, before the next task: set `task.issue` to the
-new number (tail of the printed URL), rewrite `task.branch` to `agy/issue-<number>-<slug>`
-(same slug, new number), and set the top-level `"epic": <ISSUE_NUM>` once — epic-drive
+new number (tail of the printed URL), rewrite `task.branch` to `<type>/<number>-<slug>`
+(same type and slug, new number), and set the top-level `"epic": <ISSUE_NUM>` once — epic-drive
 reads `manifest.epic`, and without it the `Part of` line is silently dropped. Write the
 manifest after **every** task, so an interrupted publish resumes where it stopped.
 
