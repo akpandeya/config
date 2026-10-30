@@ -1,29 +1,36 @@
 ---
 name: issue-decompose
 description: >-
-  Decompose a GitHub issue into atomic, runnable task prompt files. The decomposer
-  harness and model are chosen by the caller; defaults to Opus with extended thinking
-  in Claude Code. Honors a verbatim agy-tasks spec in the issue body.
-  Usage: /issue-decompose <owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>]
+  Decompose a GitHub issue into atomic tasks, filed as native sub-issues of the
+  decomposed issue (the visible plan of record), with manifest + task files saved
+  for drivers. The decomposer harness and model are chosen by the caller; defaults
+  to Opus with extended thinking in Claude Code. Honors a verbatim agy-tasks spec
+  in the issue body.
+  Usage: /issue-decompose <owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>] [--dry-run]
 allowed-tools: Bash, Read, Write, Agent
-argument-hint: "<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>]"
+argument-hint: "<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>] [--dry-run]"
 ---
 
 Decompose a GitHub issue into small, atomic implementation tasks that can each be run independently
-by any implementer harness. Saves prompts to `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/<slug>/`.
+by any implementer harness. Each task is filed as a native sub-issue of the decomposed issue — the
+sub-issue body is the task spec and the plan you can review on GitHub before anything runs. Driver
+inputs (manifest + task files) are saved to `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/<slug>/`.
 
 Run `/epic-run` to decompose, implement and review in one go. Run this skill alone only to re-decompose
 or to inspect the task list.
 
 ## Parse arguments
 
-`$ARGUMENTS`: `<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>]`
+`$ARGUMENTS`: `<owner/repo> <issue-number> [DECOMPOSER=<harness>:<model>] [--dry-run]`
 
 Example: `akpandeya/party-planner 72 DECOMPOSER=claude:opus`
 
 - `REPO`, `ISSUE_NUM`, and `SLUG` = owner + "-" + repo name + "-issue-" + issue number.
 - `PROMPT_DIR` = `${AGY_PROMPTS_DIR:-$HOME/.claude/agy-prompts}/$SLUG`.
 - `DECOMPOSER` defaults to `claude:opus` when absent.
+- `--dry-run`: run the decomposer, then print the sub-issues that would be filed
+  (titles, `blockedBy`, target parent) and stop. Create nothing on GitHub; leave
+  every `task.issue` unset.
 
 ## Locate repo
 
@@ -37,6 +44,10 @@ decomposing without a clone (reading `CLAUDE.md` or `AGENTS.md` through
 until the user sets it, and `epic-drive` refuses a null `repoPath`.
 
 ## Run the decomposer
+
+If `$PROMPT_DIR/manifest.json` already exists (a re-decompose), copy it to
+`$PROMPT_DIR/manifest.prev.json` first — the decomposer rewrites the manifest from
+scratch, and the publish step restores prior sub-issue numbers from the previous one.
 
 Use the decomposer prompt below. It is the same prompt on every harness.
 
@@ -154,8 +165,54 @@ Working dir: <abs repo path>
 After writing all files, print the task list with titles, file counts and dependency order. Then stop.
 ---
 
+## Publish sub-issues
+
+Work through the manifest tasks **in order**. This step writes to GitHub; with `--dry-run`,
+skip it entirely and instead print the list it would file (titles, `blockedBy`, parent
+`#$ISSUE_NUM`) before showing the task list.
+
+**Idempotency.** `task.issue` in the manifest means "already filed" — never create a
+second issue for it. First restore state on a re-decompose: for every task id present in
+`manifest.prev.json` with an `issue`, copy that `issue` (and its `branch`) into the new
+manifest before doing anything else. Then match tasks by `id`:
+
+- `issue` absent → file a new sub-issue (below), record it, move on.
+- `issue` present and the regenerated body differs from the stored
+  `$PROMPT_DIR/.body-<task.id>.md` → update in place:
+  `gh issue edit <SUB> --repo $REPO --title "<title>" --body-file <new body>`, then
+  overwrite the stored body file.
+- `issue` present and the body is identical → skip.
+- A filed sub-issue whose task id is gone from the manifest is an **orphan**: list it in
+  the final report and leave closing to the user. Never delete or auto-close.
+
+**Filing one task.** Build the body from the task file with two edits: drop the
+`Working dir:` line (a local machine path does not belong on GitHub) and drop the
+"Do NOT open a PR" bullet (that is the driver's implementer contract, not task spec).
+Prepend `Part of #$ISSUE_NUM.`; when `blockedBy` is non-empty, append
+`Blocked by: #<sub>, …` using the blockers' sub-issue numbers (keeps jarvis autopilot's
+body-text blocker check working).
+
+```bash
+gh issue create --repo $REPO --parent $ISSUE_NUM \
+  --title "<task title>" --body-file $PROMPT_DIR/.body-<task.id>.md
+# add --blocked-by <sub>,<sub> when every blockedBy task already has task.issue
+```
+
+`--parent` needs a recent gh — check `gh issue create --help` for the flag and tell the
+user to upgrade rather than falling back to plain issues. Keep the body file after
+filing: it is the change-detection record for re-publishes. Never inline multi-line
+bodies on the command line.
+
+**Record immediately.** After each filing, before the next task: set `task.issue` to the
+new number (tail of the printed URL), rewrite `task.branch` to `agy/issue-<number>-<slug>`
+(same slug, new number), and set the top-level `"epic": <ISSUE_NUM>` once — epic-drive
+reads `manifest.epic`, and without it the `Part of` line is silently dropped. Write the
+manifest after **every** task, so an interrupted publish resumes where it stopped.
+
 ## After the decomposer returns
 
-Read `$PROMPT_DIR/manifest.json` and show the user the task list. Then tell them the next step:
-`/epic-run $REPO $ISSUE_NUM` runs the rest, or `/epic-drive $REPO $ISSUE_NUM IMPLEMENTER=<harness>:<model>`
-drives the tasks directly.
+Publish the sub-issues (previous section), then read `$PROMPT_DIR/manifest.json` and show
+the user the task list with the sub-issue numbers as links. Point out that reviewing the
+plan on GitHub — editing or closing a sub-issue — is the intended gate before driving.
+Then tell them the next step: `/epic-run $REPO $ISSUE_NUM` runs the rest, or
+`/epic-drive $REPO $ISSUE_NUM IMPLEMENTER=<harness>:<model>` drives the tasks directly.
