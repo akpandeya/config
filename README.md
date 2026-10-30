@@ -254,6 +254,9 @@ Supported block shapes are deliberately small:
 | `comparison` | `left` and `right`, each with `label`, `value`, optional `text`; optional `caption` |
 | `diagram` | Mermaid `source`, visible `caption`, meaningful `text_alt` |
 | `details` | `summary` and nonempty nested `blocks`; nested diagrams/details are rejected |
+| `table` | nonempty `columns` (text, or `{label, align}` with `left`/`right`/`center`), `rows` of matching length; optional `caption` |
+| `chart` | `kind: bar\|line`, `labels`, `series` of `{name, values}` (numbers matching `labels`), optional `title`/`xLabel`/`yLabel`; required `caption` and `text_alt`. Rendered locally to sanitized static SVG — no chart engine dependency |
+| `dbml` | `source` in a strict DBML subset (`Table`/`Ref` statements; `pk`, `unique`, `not null`, `null`, `increment`, `default`, `note` constraints only — enums, table/ref settings, quoted names and parameterized types are rejected), plus `caption` and `text_alt`. Converted to a Mermaid ER diagram and rendered by the same pinned pipeline |
 
 A section may use `blocks` or any legacy content field, never both—even if one
 side is empty. Ambiguous mixtures fail rather than silently dropping or
@@ -316,8 +319,16 @@ in text are clickable links, not fetched content; `http://` or credentialed
 URLs stay plain text. Metadata values may be
 `{"text": "...", "url": "https://..."}` to render as a hyperlink (useful for
 pinned commit SHAs); a `Reviewed` date key is optional — the generation stamp
-usually replaces it. Sections may carry a `location` (plain `path:line` string
-or `{"text", "url"}`) shown muted under the heading. With top-level
+usually replaces it. Sources additionally accept an optional `date` (access or
+publication date) rendered next to the label, and every source entry gets a
+stable `#source-n` anchor. Sections may carry a `location` (plain `path:line` string
+or `{"text", "url"}`) shown muted under the heading. Per-claim citations: text,
+summaries, callouts, captions, steps and table cells may cite a source with
+`[[n]]` (1-based index into `sources`); each marker becomes a superscript link
+to that source entry, and a citation that does not match a source (or a
+citation with no sources) fails the render before anything is written.
+`[[n]]` markers inside copyable comments and code blocks stay literal text.
+With top-level
 `"kind": "review"`, every `Finding ...` section needs a `severity` (blocker |
 should-fix | nit | question, rendered as a colored badge), a `location` and at
 least one direct legacy `comments` entry or `comments` block, some heading must
