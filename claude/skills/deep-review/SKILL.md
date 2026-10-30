@@ -8,6 +8,12 @@ The user wants a PR reviewed. Extract the PR URL or `owner/repo#number` from
 their message; if it's ambiguous which PR (e.g. they just say "review this"
 with no link and no PR open in conversation), ask.
 
+**Scope guard:** this skill is for reviewing a change (PR or stack) only. If
+the request is to research or assess a tool, service or technology — "how
+secure is X?", "should we adopt Y?" — do not use the review template here.
+Answer as research per the shared communication policy: research structure,
+inline `[[n]]` citations with access dates, no severity badges, no Verdict.
+
 ## Hard rule
 
 **Never post anything to GitHub.** No `gh pr review`, no `gh pr comment`, no

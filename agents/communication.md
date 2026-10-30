@@ -56,3 +56,15 @@ pages or fetch remote scripts/fonts. If saving or opening fails, say what failed
 and provide the saved path if it exists; do not claim success. If this helper is
 unavailable, give the explanation and diagram in chat rather than silently
 installing a new tool or losing the answer.
+
+Research and assessment pages are not reviews. When the request is to
+investigate a tool, service, technology or question ("how secure is X?", "is Y
+a fit?"), use the same renderer but research structure — Question and scope,
+Method (what was checked, how, when), How it works, Risks or findings with
+confidence, What to do about it, Open questions — not the review template. Do
+not use PR-review severity labels (blocker/should-fix/nit) or a "Verdict"
+section there; cite claims inline with `[[n]]` markers, give each source an
+access date, and keep every claim the evidence cannot support explicitly marked
+as unverified. The `table`, `chart` and `dbml` blocks exist for query results,
+trends and schemas; use them instead of ASCII art or prose when data or
+structure is the point.

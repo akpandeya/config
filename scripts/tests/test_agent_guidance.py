@@ -512,9 +512,13 @@ class ExplainerTest(unittest.TestCase):
             ]}],
         }
         output = explainer.render(data)
-        self.assertEqual(len(re.findall(r'class="[^"]*mermaid-svg[^"]*"', output)), 2)
+        self.assertEqual(len(re.findall(r'class="[^"]*mermaid-svg[^"]*"', output)), 4)
         self.assertIn("diagram-0-0-title diagram-0-0-description", output)
         self.assertIn("diagram-0-1-title diagram-0-1-description", output)
+        self.assertEqual(output.count(" diagram-light"), 2)
+        self.assertEqual(output.count(" diagram-dark"), 2)
+        self.assertIn("diagram-0-0-dark-title", output)
+        self.assertIn('aria-hidden="true"', output)
         self.assertIn("<summary>Mermaid source</summary>", output)
         self.assertIn("flowchart TD", output)
         self.assertNotIn("<foreignObject", output)
@@ -600,7 +604,7 @@ class ExplainerTest(unittest.TestCase):
             }]}],
         }
 
-        def fail(*_args):
+        def fail(*args, **kwargs):
             raise ValueError("unsafe generated SVG")
 
         with self.assertRaisesRegex(ValueError, "unsafe generated SVG"):
@@ -613,6 +617,132 @@ class ExplainerTest(unittest.TestCase):
                 explainer.save(self.repo, "stable", data, self.home)
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(list(path.parent.iterdir()), [path])
+
+    def test_table_block_renders_and_validates(self):
+        data = {**self.data, "sections": [{"heading": "T", "blocks": [{
+            "type": "table",
+            "columns": [{"label": "Region", "align": "left"}, {"label": "Revenue", "align": "right"}],
+            "rows": [["emea", "1,200"], ["apac", "980"]],
+            "caption": "Weekly totals",
+        }]}]}
+        output = explainer.render(data)
+        self.assertIn('<th style="text-align:left">Region</th>', output)
+        self.assertIn('<td style="text-align:right">980</td>', output)
+        self.assertIn("Weekly totals", output)
+        for broken in [
+            {"type": "table", "columns": ["A"], "rows": [["1", "2"]]},
+            {"type": "table", "columns": [{"label": "A", "align": "middle"}], "rows": [["1"]]},
+            {"type": "table", "columns": ["A"], "rows": "nope"},
+            {"type": "table", "columns": [], "rows": []},
+            {"type": "table", "columns": ["A"], "rows": [[None]]},
+        ]:
+            with self.subTest(broken=broken), self.assertRaises(ValueError):
+                explainer.render({**self.data, "sections": [{"heading": "T", "blocks": [broken]}]})
+        nested = {**self.data, "sections": [{"heading": "T", "blocks": [{
+            "type": "details", "summary": "Evidence", "blocks": [{
+                "type": "table", "columns": ["A"], "rows": [["1"]]}],
+        }]}]}
+        self.assertIn("data-table", explainer.render(nested))
+
+    def test_chart_block_renders_sanitized_static_svg(self):
+        chart = {
+            "type": "chart", "kind": "bar", "labels": ["W1", "W2"],
+            "series": [{"name": "reported", "values": [120, 150]},
+                       {"name": "actual", "values": [120, 90]}],
+            "yLabel": "USD", "caption": "Fan-out gap", "text_alt": "Actuals fall behind reported.",
+        }
+        output = explainer.render({**self.data, "sections": [{"heading": "C", "blocks": [chart]}]})
+        self.assertEqual(output.count('class="mermaid-svg"'), 1)
+        self.assertIn("<rect", output)
+        self.assertIn("var(--chart-1)", output)
+        self.assertIn("Fan-out gap", output)
+        self.assertIn("Chart data", output)
+        self.assertNotIn("<foreignObject", output)
+        line = dict(chart, kind="line")
+        output = explainer.render({**self.data, "sections": [{"heading": "C", "blocks": [line]}]})
+        self.assertIn("<polyline", output)
+        for broken, fragment in [
+            (dict(chart, kind="area"), "kind"),
+            (dict(chart, labels=["W1"], series=chart["series"]), "numbers"),
+            (dict(chart, series=[{"name": "s", "values": ["a", "b"]}]), "numbers"),
+            (dict(chart, series=[]), "series"),
+            (dict(chart, series=[{"name": "s", "values": [True, 1]}]), "numbers"),
+            (dict(chart, caption=None), "caption"),
+        ]:
+            with self.subTest(broken=broken.get("kind"), fragment=fragment), self.assertRaisesRegex(
+                    ValueError, fragment):
+                explainer.render({**self.data, "sections": [{"heading": "C", "blocks": [broken]}]})
+        with self.assertRaisesRegex(ValueError, "details"):
+            explainer.render({**self.data, "sections": [{"heading": "C", "blocks": [{
+                "type": "details", "summary": "Hidden", "blocks": [chart]}]}]})
+
+    def test_dbml_block_converts_through_a_strict_subset(self):
+        source = (
+            "Table users {\n  id bigint [pk, increment]\n"
+            "  email varchar [unique, not null]\n}\n"
+            "Table orders {\n  id bigint [pk]\n  user_id bigint [not null]\n}\n"
+            "Ref: orders.user_id > users.id\n")
+        mermaid = explainer.dbml_to_mermaid(source, "dbml")
+        self.assertIn("erDiagram", mermaid)
+        self.assertIn("t0[users] {", mermaid)
+        self.assertIn("bigint id PK", mermaid)
+        self.assertIn('varchar email UK "not null"', mermaid)
+        self.assertIn("t1 }o--|| t0 : user_id", mermaid)
+        for bad, fragment in [
+            ("Table users [headercolor: #fff] {\n a int\n}", "settings"),
+            ("Table users {\n a int\n}\nEnum e { x }\n", "ENUM"),
+            ("Table users {\n a int [fk]\n}", "constraint"),
+            ("Table users {\n Note: 'hi'\n}", "Note"),
+            ("Table users {\n amount numeric(10,2)\n}", "column syntax"),
+            ("Table users {\n a int\n}\nRef: orders.user_id > users.id\n", "unknown table"),
+            ("Table users {\n a int\n}\nRef: users.a > users.missing\n", "unknown column"),
+            ("Table users {\n a int\n", "unclosed"),
+            ("Table users {\n a int\n}\nTable users {\n b int\n}", "duplicate"),
+            ("// just a comment\nSELECT 1\n", "unsupported DBML"),
+        ]:
+            with self.subTest(bad=bad.splitlines()[-1]), self.assertRaisesRegex(ValueError, fragment):
+                explainer.dbml_to_mermaid(bad, "dbml")
+
+    def test_dbml_block_renders_through_mermaid(self):
+        if not explainer.MERMAID_CLI.is_file():
+            self.skipTest("local Mermaid CLI is not installed")
+        data = {**self.data, "sections": [{"heading": "S", "blocks": [{
+            "type": "dbml", "caption": "Orders reference users.",
+            "text_alt": "Each order belongs to one user; users have many orders.",
+            "source": "Table users {\n  id bigint [pk]\n}\nTable orders {\n  id bigint [pk]\n  user_id bigint\n}\nRef: orders.user_id > users.id",
+        }]}]}
+        output = explainer.render(data)
+        self.assertEqual(len(re.findall(r'class="[^"]*mermaid-svg[^"]*"', output)), 2)
+        self.assertIn("DBML source", output)
+
+    def test_citations_link_claims_to_numbered_sources(self):
+        data = {**self.data,
+                "summary": "Claim one [[1]] and two [[2]].",
+                "sections": [{"heading": "H", "paragraphs": ["Cited [[1]].", "Uncited."]}],
+                "sources": [
+                    {"label": "One", "url": "https://example.org/1", "date": "accessed 2026-10-27"},
+                    {"label": "Two", "url": "https://example.org/2"},
+                ]}
+        output = explainer.render(data)
+        self.assertEqual(len(re.findall(r'id="source-\d+"', output)), 2)
+        self.assertEqual(output.count('href="#source-1"'), 2)  # summary + paragraph
+        self.assertEqual(output.count('href="#source-2"'), 1)
+        self.assertIn("accessed 2026-10-27", output)
+        self.assertNotIn("\x00", output)
+        too_far = json.loads(json.dumps(data))
+        too_far["sections"][0]["paragraphs"] = ["Gone too far [[3]]."]
+        with self.assertRaisesRegex(ValueError, "does not match any source"):
+            explainer.render(too_far)
+        no_sources = json.loads(json.dumps(data))
+        del no_sources["sources"]
+        with self.assertRaisesRegex(ValueError, "require at least one source"):
+            explainer.render(no_sources)
+        literal = {**self.data,
+                   "sections": [{"heading": "H", "comments": ["see [[1]] and [[9]]"]}],
+                   "sources": [{"label": "L", "url": "https://example.org"}]}
+        output = explainer.render(literal)
+        self.assertIn("[[9]]", output)
+        self.assertNotIn('href="#source-', output)
 
     def test_block_styles_cover_accessibility_responsive_theme_and_print(self):
         output = explainer.render(self.block_data())
