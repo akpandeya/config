@@ -50,13 +50,14 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `bash/` | Bash profile snippets |
 | `brew-packages.txt` | Everything Homebrew installs |
 | `agents/communication.md` | Shared plain-language and local-explanation preferences |
+| `agents/artifact-feedback.md` | Harness-neutral spec for the artifact comment-feedback loop (issue #10) |
 | `claude/skills/` | Personal skills, linked into Claude and the Gemini personal-skills plugin. Company-specific skills live in the private work-context repo. Jarvis-managed skill directories retain their own installation |
 | `claude/hooks/` | Claude Code hook scripts. None are wired up right now (`settings-hooks.json` has an empty `PostToolUse`), so `jarvis-register.sh` is not active |
 | `claude/settings-hooks.json` | Merged into `~/.claude/settings.json` — only replaces `hooks.PostToolUse`, preserves everything else |
 | `git/` | gitconfig templates (one personal, one work, one default with conditional includes) |
 | `gitconfig/` | Scoped git identity templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap. Real emails live in `emails.local.env` (gitignored — never commit them) |
 | `kitty/` | Terminal config |
-| `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
+| `scripts/` | Instruction composer, offline explanation renderer, artifact feedback server/overlay and bootstrap helpers |
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
@@ -309,9 +310,10 @@ The renderer validates the complete input, renders every diagram, sanitizes all
 SVG and constructs the complete HTML before atomically replacing the
 destination. Missing tooling or browser assets, invalid Mermaid syntax,
 unsupported/unsafe SVG, unknown JSON keys and invalid schema all fail
-explicitly; an existing artifact remains unchanged. The only browser-side
-script is a static copy-to-clipboard helper (no content is interpolated into it,
-and the CSP pins it by sha256 hash). There are no remote fonts or assets.
+explicitly; an existing artifact remains unchanged. The browser-side scripts are
+a static copy-to-clipboard helper and the comment feedback overlay (neither has
+content interpolated into it, and the CSP pins both by sha256 hash). The overlay
+talks only to the localhost feedback server. There are no remote fonts or assets.
 Colors follow the system light/dark theme and reset to the light palette when
 printing. Closed details are forced open in printed output so evidence is not
 lost. Each page stamps its own UTC generation time. Sources and bare https URLs
@@ -338,6 +340,41 @@ indexed under the summary with anchor links, and leftover
 render (quoting them inside content blocks is fine). Use
 synthetic examples, not credentials or unnecessary production data. A failed
 browser open reports the saved path, not a false success.
+
+### Artifact feedback loop
+
+Generated artifacts are commentable. `scripts/artifact-overlay.js` (embedded by
+the renderer and also injected by the feedback server into any HTML it serves)
+lets a reader click any element and leave a comment; comments persist to
+`<artifact>.feedback.json` next to the artifact and mirror to `localStorage`
+for `file://` viewing.
+
+The feedback server (`scripts/artifact-server.py`) serves the artifacts
+directory on `127.0.0.1:8787` only — LAN devices and remote access go through
+the cloudflared tunnel (see the `cloudflared/` README section when it lands;
+issue #19):
+
+```bash
+scripts/install-artifact-server.sh   # LaunchAgent, idempotent restart
+launchctl bootout gui/$(id -u)/com.user.artifact-server   # stop
+```
+
+Agent API (also usable by any harness that can read files — the JSON file is
+the source of truth):
+
+```bash
+curl -s http://127.0.0.1:8787/api/feedback/pending           # artifacts with open comments
+curl -s "http://127.0.0.1:8787/api/feedback?artifact=<path>" # one artifact's comments
+# POST /api/comments {artifact, comments:[...]} appends; DELETE removes one by id
+```
+
+To apply the feedback, agents follow `agents/artifact-feedback.md`
+(harness-neutral spec): read open comments, rework the artifact, mark the
+comments `resolved` in the feedback JSON. Harness entry points:
+`/artifact-feedback` in OpenCode (`opencode/command/`), the
+`artifact-feedback` skill for Claude Code and Gemini (`claude/skills/`; Gemini
+consumes it via the personal-skills plugin). Tests:
+`python3 -m unittest discover -s scripts/tests -p 'test_artifact_feedback.py'`.
 
 ### Review boundaries and portability
 

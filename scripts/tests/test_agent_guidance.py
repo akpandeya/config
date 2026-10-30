@@ -133,8 +133,9 @@ class ExplainerTest(unittest.TestCase):
         output = explainer.render(self.data)
         self.assertIn("&lt;script&gt;", output)
         self.assertNotIn("<script>unsafe", output)
-        self.assertEqual(output.count("<script>"), 1)  # the static copy helper only
+        self.assertEqual(output.count("<script>"), 2)  # copy helper + feedback overlay
         self.assertIn("default-src 'none'", output)
+        self.assertEqual(explainer.render(self.data, overlay=False).count("<script>"), 1)
         self.assertIn('id="arrow-0"', output)
         self.assertIn('id="arrow-1"', output)
         self.assertIn("&lt;p&gt;not markup&lt;/p&gt;", output)
