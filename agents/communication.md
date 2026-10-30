@@ -31,7 +31,7 @@ For a substantial technical review or explanation, also create a self-contained
 HTML page and open it once when ready. Keep the useful answer in chat as well.
 An isolated one-line finding or small re-review update does not need a new page.
 
-Use `python3 ~/code/personal/config/scripts/agent-explainer.py --repo <repo-path>
+Use `python3 ~/code/personal/atelier/scripts/agent-explainer.py --repo <repo-path>
 --topic <stable-topic> --input <json-file>`; see the script's `--help` and the
 config README for the input format. It saves outside Git under
 `~/.local/share/agent-explainers/<repo>/<topic>.html` and opens the local file.
