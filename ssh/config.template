@@ -11,17 +11,19 @@ Host github.com-work
     IdentityFile ~/.ssh/id_hf_thinkpad
     IdentitiesOnly yes
 
-# Personal GitHub (Asus fedora key)
+# Personal GitHub keys (ssh uses the first key that exists on this machine)
 Host github.com-personal
     HostName github.com
     User git
+    IdentityFile ~/.ssh/id_dipus_macbook
     IdentityFile ~/.ssh/id_asus_fedora
     IdentitiesOnly yes
 
-# Default GitHub → personal key
+# Default GitHub → personal keys (first available wins)
 Host github.com
     HostName github.com
     User git
+    IdentityFile ~/.ssh/id_dipus_macbook
     IdentityFile ~/.ssh/id_asus_fedora
     IdentitiesOnly yes
 
