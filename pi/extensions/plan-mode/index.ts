@@ -11,6 +11,7 @@
  *
  * Features:
  * - /plan command or Ctrl+Alt+P to toggle
+ * - Shift+Tab: plan -> approval dialog -> execute, asked again until approved
  * - Bash restricted to allowlisted read-only commands
  * - Extracts numbered plan steps from "Plan:" sections
  * - [DONE:n] markers to complete steps during execution
@@ -167,6 +168,65 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		persistState();
 	}
 
+	const APPROVE = "Approve — implement now";
+	const KEEP_PLANNING = "Keep planning";
+	const REVISE = "Revise plan…";
+
+	/**
+	 * Claude Code-style approval gate: show the plan, ask permission, and repeat
+	 * (revise -> re-plan -> ask again) until the user approves.
+	 */
+	async function requestPlanApproval(ctx: ExtensionContext): Promise<void> {
+		if (todoItems.length === 0) return;
+
+		const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
+		const planTodoListMessage = {
+			customType: "plan-todo-list",
+			content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
+			display: true,
+		};
+
+		const choice = await ctx.ui.select(`Approve this plan? (${todoItems.length} steps)`, [
+			APPROVE,
+			KEEP_PLANNING,
+			REVISE,
+		]);
+
+		if (choice === APPROVE) {
+			const firstTodoItem = todoItems[0];
+			if (!firstTodoItem) return;
+
+			beginExecution(ctx);
+
+			const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
+			const execMessage = `Execute the plan.
+
+Remaining steps:
+${remainingList}
+
+Start with: ${firstTodoItem.text}
+After completing a step, include a [DONE:n] tag in your response.`;
+			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
+			pi.sendMessage(
+				{ customType: "plan-mode-execute", content: execMessage, display: true },
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+			return;
+		}
+
+		if (choice === REVISE) {
+			const refinement = await ctx.ui.editor("What should change in the plan?", "");
+			if (refinement?.trim()) {
+				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
+				pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
+			}
+			return;
+		}
+
+		// KEEP_PLANNING, or the dialog was dismissed: stay in plan mode. The next
+		// plan the agent presents asks again.
+	}
+
 	pi.registerCommand("plan", {
 		description: "Toggle plan mode (read-only exploration)",
 		handler: async (_args, ctx) => togglePlanMode(ctx),
@@ -204,12 +264,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 			if (!planModeEnabled) {
 				enterPlanMode(ctx);
-				ctx.ui.notify("⏸ Plan mode (read-only). Shift+Tab to execute.");
+				ctx.ui.notify("⏸ Plan mode (read-only). Shift+Tab to review the plan.");
 				return;
 			}
 
 			if (todoItems.length === 0) {
-				// Nothing to execute yet: Shift+Tab leaves plan mode instead of
+				// Nothing to approve yet: Shift+Tab leaves plan mode instead of
 				// pretending to execute an empty plan.
 				planModeEnabled = false;
 				restoreNormalModeTools();
@@ -219,11 +279,13 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			beginExecution(ctx);
-			const remaining = todoItems.filter((t) => !t.completed).length;
-			ctx.ui.notify(
-				`▶ Execute mode: full tool access, ${remaining} step(s) left. The next prompt runs with the plan context.`,
-			);
+			// A plan exists, so Shift+Tab asks for permission instead of jumping
+			// straight into execute mode. Rejection keeps the plan loop going.
+			if (!ctx.isIdle()) {
+				ctx.ui.notify("Finish the current turn before approving the plan.", "info");
+				return;
+			}
+			await requestPlanApproval(ctx);
 		},
 	});
 
@@ -292,7 +354,9 @@ Plan:
 2. Second step description
 ...
 
-Do NOT attempt to make changes - just describe what you would do.`,
+Do NOT attempt to make changes - just describe what you would do. Then stop and
+wait: the user approves, keeps planning, or asks for a revision, and every
+revised plan is presented for approval again.`,
 					display: false,
 				},
 			};
@@ -368,46 +432,9 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		if (todoItems.length === 0) return;
 		persistState();
 
-		// Show plan steps and prompt for next action
-		const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
-		const planTodoListMessage = {
-			customType: "plan-todo-list",
-			content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
-			display: true,
-		};
-
-		const choice = await ctx.ui.select("Plan mode - what next?", [
-			"Execute the plan (track progress)",
-			"Stay in plan mode",
-			"Refine the plan",
-		]);
-
-		if (choice?.startsWith("Execute")) {
-			const firstTodoItem = todoItems[0];
-			if (!firstTodoItem) return;
-
-			beginExecution(ctx);
-
-			const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
-			const execMessage = `Execute the plan.
-
-Remaining steps:
-${remainingList}
-
-Start with: ${firstTodoItem.text}
-After completing a step, include a [DONE:n] tag in your response.`;
-			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
-			pi.sendMessage(
-				{ customType: "plan-mode-execute", content: execMessage, display: true },
-				{ triggerTurn: true, deliverAs: "followUp" },
-			);
-		} else if (choice === "Refine the plan") {
-			const refinement = await ctx.ui.editor("Refine the plan:", "");
-			if (refinement?.trim()) {
-				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
-				pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
-			}
-		}
+		// Ask permission again on every plan the agent presents. Refining sends
+		// the revision as a follow-up, so the loop repeats until approved.
+		await requestPlanApproval(ctx);
 	});
 
 	// Restore state on session start/resume
