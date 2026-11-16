@@ -246,6 +246,9 @@ echo
 
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Homebrew packages (including node) are installed before the Pi CLI.
+DRY_RUN="$DRY_RUN" bash "$REPO_DIR/scripts/install-pi.sh"
+
 if [ "$DRY_RUN" = "1" ]; then
     echo "Would run: $REPO_DIR/git/setup.sh (dry-run mode not supported by that script — skipped)"
 else

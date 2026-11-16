@@ -60,7 +60,7 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
-| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1` |
+| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1`, `SKIP_PI=1` (skip Pi CLI installation) |
 
 ## Jumping into a repo with an AI harness (`dev`)
 
@@ -68,13 +68,16 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 
 | Command | What it does |
 |---|---|
-| `dev` / `dev <query>` | fzf over all repos, shortcuts pinned on top marked `*`, group folders (e.g. `work`, `personal`) marked `>`. `enter` asks which harness, `ctrl-o` opens opencode, `ctrl-c` opens Claude Code. |
+| `dev` / `dev <query>` | fzf over all repos, shortcuts pinned on top marked `*`, group folders (e.g. `work`, `personal`) marked `>`. `enter` asks which harness, `ctrl-o` opens opencode, `ctrl-c` opens Claude Code, `ctrl-p` opens Pi, `ctrl-n` opens nvim. |
 | `cc [target] [flags]` | Claude Code (`claude --dangerously-skip-permissions`). No target → opens in the current directory. Args from the first `-...` one onward are passed through: `cc dach-pheidi --resume`, `cc --resume`. |
 | `oc [target] [flags]` | opencode (`opencode --auto`). No target → opens in the current directory. Same flag passthrough as `cc`. |
+| `pc [target] [flags]` | Pi (`pi`). Same repo resolution and flag passthrough as `cc`/`oc`: `pc fda`, `pc gambitflow --continue`, `pc --resume`. |
 | `<shortcut>` e.g. `fda` | cd into the shortcut's repo + launch its default harness. Extra args are forwarded to the harness (`fda --resume`). |
 | `fcd [query]` | fuzzy-cd into a repo/folder directly under a group folder (`work/<repo>`, `personal/<repo>`) — just cd's, no harness. |
 
 A `target` can be a shortcut name (`cc fda`), a repo basename (`oc gambitflow`), a group folder (`cc work`, `oc personal`), a full relative path, or a fuzzy query (`cc dem and` → picker pre-filtered).
+
+`pc` means **Pi Coding**. The native `pi` command stays untouched for prompts and management commands (`pi "explain this repo"`, `pi update`, `pi auth login`). Like `cc`/`oc`, words before the first flag in `pc` are a repo query, not a prompt. Pi launches without a permission-bypass flag; it does not ask for approval before every tool call, but project trust is a separate check.
 
 ## Postgres (`fpsql`)
 
@@ -95,15 +98,24 @@ In nvim, `:SqlScratch` / `:SqlHistory` also cover two CLI-backed backends beside
    gfw = personal/gambitflow : claude
    ```
    Format: `name = path-relative-to-code-root [: default-harness]`. The default harness is optional — without it the bare command only cd's.
-2. `cc gfw`, `oc gfw` and `dev` pick it up **immediately** (the conf is re-read on every call). The bare `gfw` command appears in new shells (`source ~/.zshrc`).
+2. `cc gfw`, `oc gfw`, `pc gfw` and `dev` pick it up **immediately** (the conf is re-read on every call). The bare `gfw` command appears in new shells (`source ~/.zshrc`).
 
 ### Add or change a harness
 
-Edit `shell/dev.sh`: the `case` in `_dev_launch` (repo jumps) and the no-arg `case` in `_dev_go` (current-dir launches). `opencode` and `claude` are the two known harnesses.
+Edit `shell/dev.sh`: the `case` in `_dev_launch` (repo jumps) and the no-arg `case` in `_dev_go` (current-dir launches). Supported launchers are `opencode`, `claude`, `pi` and `nvim`. A shortcut can use `: pi` to make Pi its default.
 
 ### New machine
 
-Nothing extra to do: `setup-dev-env.sh` installs `fzf` and `anomalyco/tap/opencode` from `brew-packages.txt` and wires `shell/aliases.sh` into `~/.zshrc`, which sources `dev.sh`. Claude Code itself is installed by its native installer, not Homebrew.
+`setup-dev-env.sh` installs `fzf` and `node` from `brew-packages.txt` and wires `shell/aliases.sh` into `~/.zshrc`, which sources `dev.sh`. It also runs `scripts/install-pi.sh` in both personal and work profiles:
+
+- Requires Node.js 22.19+ and installs `@earendil-works/pi-coding-agent` globally with npm (`--ignore-scripts`).
+- Leaves an existing Pi installation in the current npm prefix unchanged; fails clearly if another `pi` executable is on PATH rather than overwriting it.
+- Supports `DRY_RUN=1` and `SKIP_PI=1`. To run just this step: `bash scripts/install-pi.sh`.
+- Verifies `pi --version`. On first use, run `pi` and `/login`; credentials are local and are not installed from this repo.
+
+Open a new shell (or `source ~/.zshrc`) to use `pc`. Use `pi update` when you want to update Pi.
+
+OpenCode and Claude Code are **not currently installed by this bootstrap**; install those CLIs separately.
 
 ## Markdown site preview (`mdserve`)
 

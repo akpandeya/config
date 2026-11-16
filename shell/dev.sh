@@ -5,7 +5,8 @@
 #                   ~/code), shortcuts pinned on top marked "*", group
 #                   folders (e.g. work, personal) marked ">".
 #                   enter asks for a harness, ctrl-o = opencode,
-#                   ctrl-c = Claude Code, ctrl-n = nvim.
+#                   ctrl-c = Claude Code, ctrl-p = Pi, ctrl-n = nvim.
+#   pc [target]     Pi (pi)
 #   cc [target]     Claude Code (claude --dangerously-skip-permissions)
 #   oc [target]     opencode (opencode --auto)
 #   nv [target]     nvim
@@ -94,7 +95,7 @@ _dev_repos() {
 }
 
 # Immediate subdirectories of the code root (e.g. work, personal) — lets
-# cc/oc/dev jump straight to a group root, not just individual repos.
+# cc/oc/pc/dev jump straight to a group root, not just individual repos.
 _dev_groups() {
     local root="$(_dev_code_root)"
     [ -d "$root" ] || return 1
@@ -143,26 +144,28 @@ _dev_launch() {
     case "$harness" in
         opencode) opencode --auto "$@" ;;
         claude)   claude --dangerously-skip-permissions "$@" ;;
+        pi)       command pi "$@" ;;
         nvim)     nvim "$@" ;;
-        *) echo "dev: unknown harness '$harness' (expected opencode, claude or nvim)" >&2; return 1 ;;
+        *) echo "dev: unknown harness '$harness' (expected opencode, claude, pi or nvim)" >&2; return 1 ;;
     esac
 }
 
 _dev_pick_harness() {
     local choice
     while true; do
-        read -k 1 "choice?Harness: [o]pencode / [c]laude / [n]vim / [q]uit? "
+        read -k 1 "choice?Harness: [o]pencode / [c]laude / [p]i / [n]vim / [q]uit? "
         echo
         case "$choice" in
             o|O) print -r -- opencode; return 0 ;;
             c|C) print -r -- claude;   return 0 ;;
+            p|P) print -r -- pi;       return 0 ;;
             n|N) print -r -- nvim;     return 0 ;;
             q|Q|$'\n'|$'\r') return 1 ;;
         esac
     done
 }
 
-# --- resolution (for cc/oc <target>) ----------------------------------------
+# --- resolution (for cc/oc/pc <target>) ----------------------------------------
 
 # Resolve a target (shortcut name / repo path / repo basename / fuzzy query)
 # to a relpath. Prints the relpath; returns non-zero if cancelled/unresolved.
@@ -231,9 +234,9 @@ dev() {
         return 1
     fi
     local out key sel rel harness
-    out="$(_dev_list | fzf --expect=ctrl-o,ctrl-c,ctrl-n --query="$*" \
+    out="$(_dev_list | fzf --expect=ctrl-o,ctrl-c,ctrl-p,ctrl-n --query="$*" \
         --prompt='dev> ' --height=40% --reverse \
-        --header='enter: pick harness | ctrl-o: opencode | ctrl-c: claude | ctrl-n: nvim')" || return 0
+        --header='enter: pick harness | ctrl-o: opencode | ctrl-c: claude | ctrl-p: pi | ctrl-n: nvim')" || return 0
     key="$(head -n 1 <<< "$out")"
     sel="$(sed -n 2p <<< "$out")"
     if [ -z "$sel" ]; then return 0; fi
@@ -241,6 +244,7 @@ dev() {
     case "$key" in
         ctrl-o) harness=opencode ;;
         ctrl-c) harness=claude ;;
+        ctrl-p) harness=pi ;;
         ctrl-n) harness=nvim ;;
         *)
             harness="$(_dev_pick_harness)" || { echo "dev: cancelled"; return 0; }
@@ -269,6 +273,7 @@ _dev_go() {
         case "$harness" in
             opencode) opencode --auto "${flags[@]}" ;;
             claude)   claude --dangerously-skip-permissions "${flags[@]}" ;;
+            pi)       command pi "${flags[@]}" ;;
             nvim)     nvim "${flags[@]}" ;;
         esac
         return
@@ -282,6 +287,7 @@ _dev_go() {
 
 cc() { _dev_go claude "$@"; }
 oc() { _dev_go opencode "$@"; }
+pc() { _dev_go pi "$@"; }
 nv() { _dev_go nvim "$@"; }
 
 # pys [template] [name]: open this project's python scratch directly in nvim
@@ -379,21 +385,28 @@ _dev_shortcut_run() {
 }
 
 # Define one bare command per shortcut (runs at shell startup; new shortcuts
-# need a new shell or `source ~/.zshrc` — cc/oc/dev see them instantly).
+# need a new shell or `source ~/.zshrc` — cc/oc/pc/dev see them instantly).
+# Remember the exact bodies we generated across reloads. Only suppress warnings
+# for our own unchanged functions, not a user replacement with the same name.
+typeset -gA _dev_generated_shortcuts
+
 _dev_define_shortcuts() {
     local name rpath harness
     while IFS=$'\t' read -r name rpath harness; do
         if [ -z "$name" ]; then continue; fi
         case "$name" in
-            dev|cc|oc|nv|fcd|pys|jss)
+            dev|cc|oc|pc|pi|nv|fcd|pys|jss)
                 echo "dev: shortcut '$name' ignored (reserved name)" >&2
                 continue
                 ;;
         esac
-        if whence -w "$name" >/dev/null 2>&1; then
+        if whence -w "$name" >/dev/null 2>&1 && \
+            { [[ -z "${_dev_generated_shortcuts[$name]-}" ]] || \
+              [[ "${functions[$name]-}" != "${_dev_generated_shortcuts[$name]}" ]]; }; then
             echo "dev: warning — shortcut '$name' shadows existing command ($(whence -w "$name"))" >&2
         fi
         eval "${name}() { _dev_shortcut_run ${(q)name} \"\$@\"; }"
+        _dev_generated_shortcuts[$name]="${functions[$name]}"
     done < <(_dev_shortcuts)
 }
 
