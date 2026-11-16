@@ -315,6 +315,12 @@ link_config "$REPO_DIR/kitty/kitty.conf"       "$HOME/.config/kitty/kitty.conf"
 link_config "$REPO_DIR/kitty/tab_bar.py"       "$HOME/.config/kitty/tab_bar.py"
 link_config "$REPO_DIR/starship/starship.toml" "$HOME/.config/starship.toml"
 link_config "$REPO_DIR/nvim"                   "$HOME/.config/nvim"
+
+# Pi extensions are auto-discovered from ~/.pi/agent/extensions/, so the repo
+# can own them. plan-mode is vendored from the pi package's examples — see
+# pi/README.md for the pinned version, local tweaks and update steps.
+link_config "$REPO_DIR/pi/extensions/plan-mode" \
+            "$HOME/.pi/agent/extensions/plan-mode"
 link_config "$REPO_DIR/claude/skills/jarvis-suggest/SKILL.md" \
             "$HOME/.claude/skills/jarvis-suggest/SKILL.md"
 link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
