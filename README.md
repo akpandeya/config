@@ -56,7 +56,7 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `git/` | gitconfig templates (one personal, one work, one default with conditional includes) |
 | `gitconfig/` | Scoped git identity templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap. Real emails live in `emails.local.env` (gitignored — never commit them) |
 | `kitty/` | Terminal config |
-| `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only `/plan` phase + tracked execute phase) |
+| `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only `/plan` phase + tracked execute phase; `Shift+Tab` switches). `pi/keybindings.json` moves thinking-level cycling to `Alt+T` to free `Shift+Tab` |
 | `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
@@ -113,6 +113,7 @@ Edit `shell/dev.sh`: the `case` in `_dev_launch` (repo jumps) and the no-arg `ca
 - Leaves an existing Pi installation in the current npm prefix unchanged; fails clearly if another `pi` executable is on PATH rather than overwriting it.
 - Supports `DRY_RUN=1` and `SKIP_PI=1`. To run just this step: `bash scripts/install-pi.sh`.
 - Links `pi/extensions/plan-mode` into `~/.pi/agent/extensions/plan-mode`, so every machine gets the same plan/execute mode (`/plan`, `Ctrl+Alt+P`, `pi --plan`). Pinned upstream version and update steps: `pi/README.md`.
+- Links `pi/keybindings.json` into `~/.pi/agent/keybindings.json`, moving `app.thinking.cycle` to `Alt+T` so `Shift+Tab` can switch plan ↔ execute.
 - Verifies `pi --version`. On first use, run `pi` and `/login`; credentials are local and are not installed from this repo.
 
 Open a new shell (or `source ~/.zshrc`) to use `pc`. Use `pi update` when you want to update Pi.

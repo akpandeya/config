@@ -321,6 +321,10 @@ link_config "$REPO_DIR/nvim"                   "$HOME/.config/nvim"
 # pi/README.md for the pinned version, local tweaks and update steps.
 link_config "$REPO_DIR/pi/extensions/plan-mode" \
             "$HOME/.pi/agent/extensions/plan-mode"
+# keybindings.json moves app.thinking.cycle off Shift+Tab so plan-mode can own
+# Shift+Tab for the plan <-> execute switch (Pi reserves built-in keys).
+link_config "$REPO_DIR/pi/keybindings.json" \
+            "$HOME/.pi/agent/keybindings.json"
 link_config "$REPO_DIR/claude/skills/jarvis-suggest/SKILL.md" \
             "$HOME/.claude/skills/jarvis-suggest/SKILL.md"
 link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \

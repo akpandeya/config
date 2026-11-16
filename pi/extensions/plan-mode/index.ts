@@ -147,6 +147,26 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		persistState();
 	}
 
+	function enterPlanMode(ctx: ExtensionContext): void {
+		planModeEnabled = true;
+		executionMode = false;
+		enablePlanModeTools();
+		updateStatus(ctx);
+		persistState();
+	}
+
+	/**
+	 * Execute mode: plan mode off, every previously active tool restored, and no
+	 * bash allowlist — the tool_call gate below only runs while planModeEnabled.
+	 */
+	function beginExecution(ctx: ExtensionContext): void {
+		planModeEnabled = false;
+		executionMode = true;
+		restoreNormalModeTools();
+		updateStatus(ctx);
+		persistState();
+	}
+
 	pi.registerCommand("plan", {
 		description: "Toggle plan mode (read-only exploration)",
 		handler: async (_args, ctx) => togglePlanMode(ctx),
@@ -169,9 +189,48 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
-	// Block destructive bash commands in plan mode
+	// Shift+Tab flips between planning and executing. Pi reserves Shift+Tab for
+	// app.thinking.cycle, so ~/.pi/agent/keybindings.json must move that binding
+	// (pi/keybindings.json does it, linked by setup-dev-env.sh). Otherwise Pi
+	// skips this shortcut with a conflict warning.
+	pi.registerShortcut("shift+tab", {
+		description: "Switch plan mode <-> execute mode",
+		handler: async (ctx) => {
+			if (executionMode) {
+				enterPlanMode(ctx);
+				ctx.ui.notify("⏸ Plan mode (read-only). Shift+Tab to execute again.");
+				return;
+			}
+
+			if (!planModeEnabled) {
+				enterPlanMode(ctx);
+				ctx.ui.notify("⏸ Plan mode (read-only). Shift+Tab to execute.");
+				return;
+			}
+
+			if (todoItems.length === 0) {
+				// Nothing to execute yet: Shift+Tab leaves plan mode instead of
+				// pretending to execute an empty plan.
+				planModeEnabled = false;
+				restoreNormalModeTools();
+				updateStatus(ctx);
+				persistState();
+				ctx.ui.notify("No plan yet — left plan mode. Full access restored.");
+				return;
+			}
+
+			beginExecution(ctx);
+			const remaining = todoItems.filter((t) => !t.completed).length;
+			ctx.ui.notify(
+				`▶ Execute mode: full tool access, ${remaining} step(s) left. The next prompt runs with the plan context.`,
+			);
+		},
+	});
+
+	// Block destructive bash commands in plan mode. Execute mode never reaches
+	// this branch: it deliberately has full access to every command.
 	pi.on("tool_call", async (event) => {
-		if (!planModeEnabled || event.toolName !== "bash") return;
+		if (!planModeEnabled || executionMode || event.toolName !== "bash") return;
 
 		const command = event.input.command as string;
 		if (!isSafeCommand(command)) {
@@ -251,6 +310,7 @@ Remaining steps:
 ${todoList}
 
 Execute each step in order.
+Every tool and every bash command is available; nothing is restricted in execute mode.
 After completing a step, include a [DONE:n] tag in your response.`,
 					display: false,
 				},
@@ -326,11 +386,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 			const firstTodoItem = todoItems[0];
 			if (!firstTodoItem) return;
 
-			planModeEnabled = false;
-			executionMode = true;
-			restoreNormalModeTools();
-			updateStatus(ctx);
-			persistState();
+			beginExecution(ctx);
 
 			const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
 			const execMessage = `Execute the plan.
