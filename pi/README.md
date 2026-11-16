@@ -12,6 +12,9 @@ and edits are live without re-running setup (Pi reads the files at startup;
 | Extension | What it does |
 |---|---|
 | `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`) that presents the plan and asks **Approve / Keep planning / Revise** until you approve, then executes with `[DONE:n]` step tracking and a progress widget |
+| `inline-bash.ts` | Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
+| `subagent/` | Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
+| `dynamic-tools.ts` | Template for runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
 | `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Single override: `app.thinking.cycle` moves to `Alt+T`, freeing `Shift+Tab` for plan-mode |
 
 ### plan-mode is vendored, not installed
@@ -43,6 +46,24 @@ Local deviations from upstream:
 
 Everything else is upstream. If you customize further, note it here.
 
+### inline-bash, subagent, dynamic-tools (vendored)
+
+Also vendored from `@earendil-works/pi-coding-agent` examples, same policy as plan-mode:
+symlinked into `~/.pi/agent/extensions/`, source of truth in this repo.
+
+```bash
+UP="$(npm root -g)/@earendil-works/pi-coding-agent/examples/extensions"
+diff -u "$UP/inline-bash.ts" pi/extensions/inline-bash.ts
+diff -u "$UP/dynamic-tools.ts" pi/extensions/dynamic-tools.ts
+diff -ur "$UP/subagent" pi/extensions/subagent
+```
+
+Subagent additionally symlinks sample agents (`scout`, `planner`, `reviewer`,
+`worker`) into `~/.pi/agent/agents/` and workflow prompts (`/implement`,
+`/scout-and-plan`, `/implement-and-review`) into `~/.pi/agent/prompts/`.
+It runs user-level agents only by default (`.pi/agents` in untrusted repos is
+ignored). Check `subagent/README.md` for the security model.
+
 ### Updating after a pi upgrade
 
 ```bash
@@ -56,6 +77,16 @@ numbers in the file headers and in this README, then test:
 
 ```bash
 pi --help | grep -- --plan      # proves the extension loaded
+```
+
+### Verification
+
+After adding an extension, sanity-check it loads:
+
+```bash
+cd $(mktemp -d) && pi --list-commands 2>/dev/null || true
+# then in pi: /add-echo-tool mytest  (dynamic-tools), /reload after edits,
+# and prompt: branch is !{git branch --show-current}   (inline-bash)
 ```
 
 ### Usage
