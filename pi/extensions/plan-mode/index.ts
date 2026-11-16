@@ -21,13 +21,16 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { Key } from "@earendil-works/pi-tui";
 import { allStepsComplete, extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.ts";
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
-const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
-const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write"]);
+const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "plan_done"];
+// plan_done is excluded in plan mode so the model can't tick steps early; it is
+// only active during execution, where it marks steps done immediately.
+const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write", "plan_done"]);
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
 interface PlanModeState {
@@ -168,6 +171,49 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		persistState();
 	}
 
+	// Local deviation from upstream: a tool the agent calls to tick plan steps
+	// immediately, mid-turn, instead of waiting for [DONE:n] tags to be parsed at
+	// message end (which made the progress widget jump 0 -> all at once).
+	pi.registerTool({
+		name: "plan_done",
+		label: "Plan step done",
+		description:
+			"Mark one or more plan steps as completed. Call this tool immediately after finishing each plan step (e.g. {\"steps\":[1]}). Also include a [DONE:n] tag in your text as a backup.",
+		promptSnippet: "Report completed plan-step numbers during plan execution",
+		promptGuidelines: [
+			"When executing a plan, call plan_done with the finished step number(s) right after completing each step.",
+		],
+		parameters: Type.Object({
+			steps: Type.Array(Type.Number({ description: "Plan step number(s) that are now complete" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!executionMode || todoItems.length === 0) {
+				return {
+					content: [{ type: "text", text: "No plan execution in progress; step not recorded." }],
+					details: {},
+				};
+			}
+			const marked: number[] = [];
+			for (const n of params.steps) {
+				const item = todoItems.find((t) => t.step === n);
+				if (item && !item.completed) {
+					item.completed = true;
+					marked.push(n);
+				}
+			}
+			const completed = todoItems.filter((t) => t.completed).length;
+			if (marked.length > 0) {
+				updateStatus(ctx);
+				persistState();
+			}
+			const text =
+				marked.length > 0
+					? `Marked step(s) ${marked.join(", ")} done. Progress: ${completed}/${todoItems.length}.`
+					: `No change: ${completed}/${todoItems.length} steps already complete.`;
+			return { content: [{ type: "text", text }], details: { marked } };
+		},
+	});
+
 	const APPROVE = "Approve — implement now";
 	const KEEP_PLANNING = "Keep planning";
 	const REVISE = "Revise plan…";
@@ -205,7 +251,7 @@ Remaining steps:
 ${remainingList}
 
 Start with: ${firstTodoItem.text}
-After completing a step, include a [DONE:n] tag in your response.`;
+After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`;
 			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
 			pi.sendMessage(
 				{ customType: "plan-mode-execute", content: execMessage, display: true },
@@ -375,7 +421,7 @@ ${todoList}
 
 Execute each step in order.
 Every tool and every bash command is available; nothing is restricted in execute mode.
-After completing a step, include a [DONE:n] tag in your response.`,
+After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`,
 					display: false,
 				},
 			};

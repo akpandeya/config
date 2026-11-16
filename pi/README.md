@@ -40,6 +40,12 @@ Local deviations from upstream:
   bash allowlist; the allowlist only gates plan mode.
 - Execute-mode prompt now states explicitly that every tool and command is
   available, so the model doesn't self-censor.
+- Added a `plan_done` tool (registerTool in `index.ts`): during execution the
+  agent calls it with finished step numbers, so the progress widget ticks
+  immediately mid-turn instead of jumping 0 → all-done when the message ends
+  (`[DONE:n]` tags in text are still scanned as a fallback). The tool is
+  excluded from plan mode via `PLAN_MODE_DISABLED_TOOLS` so steps can't be
+  ticked early; both execute prompts instruct the agent to call it.
 - `pi/keybindings.json` moves `app.thinking.cycle` to `Alt+T`. Pi reserves
   `Shift+Tab` for that action and would otherwise skip the extension shortcut
   with a conflict warning.
@@ -70,6 +76,13 @@ ignored). Check `subagent/README.md` for the security model.
 UP="$(npm root -g)/@earendil-works/pi-coding-agent/examples/extensions/plan-mode"
 diff -u "$UP/utils.ts" pi/extensions/plan-mode/utils.ts
 diff -u "$UP/index.ts" pi/extensions/plan-mode/index.ts
+```
+
+Re-copy upstream, re-apply the deviations above (including the `plan_done`
+tool), then syntax-check the vendored file loads:
+
+```bash
+node -e 'import("/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs").then(async ({ createJiti }) => { const j = createJiti(import.meta.url, { alias: { typebox: "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.mjs" } }); const m = await j.import("pi/extensions/plan-mode/index.ts", { default: true }); console.log(typeof m); })'
 ```
 
 Re-copy upstream, re-apply the two prompt deviations above, update the version
