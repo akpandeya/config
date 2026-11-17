@@ -15,7 +15,10 @@
  * - Bash restricted to allowlisted read-only commands
  * - Extracts numbered plan steps from "Plan:" sections
  * - [DONE:n] markers to complete steps during execution
- * - Progress tracking widget during execution
+ * - Progress widget above the editor during execution: numbered steps, laid out
+ *   in 1-4 columns to use the terminal width, capped at MAX_WIDGET_ROWS rows
+ *   with the remainder behind /todos (see todos-view.ts)
+ * - /todos opens the full list in a scrollable overlay
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -23,6 +26,7 @@ import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Key } from "@earendil-works/pi-tui";
+import { OVERLAY_PAGE_ROWS, createTodoOverlay, renderTodoWidget } from "./todos-view.ts";
 import {
 	allStepsComplete,
 	extractTodoItemsFromBlocks,
@@ -103,16 +107,27 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
 
-		// Widget showing todo list
+		// Widget above the editor. Columns adapt to the terminal width, so the
+		// layout has to be computed per render width rather than up front.
 		if (executionMode && todoItems.length > 0) {
-			const lines = todoItems.map((item) => {
-				const text = item.text.length > 60 ? `${item.text.slice(0, 57)}...` : item.text;
-				if (item.completed) {
-					return ctx.ui.theme.fg("success", "☑ ") + ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(text));
-				}
-				return `${ctx.ui.theme.fg("muted", "☐ ")}${text}`;
+			const snapshot = todoItems.map((item) => `${item.step}:${item.completed ? 1 : 0}`).join(",");
+			ctx.ui.setWidget("plan-todos", (_tui, theme) => {
+				let cachedWidth: number | undefined;
+				let cachedSnapshot = "";
+				let cachedLines: string[] | undefined;
+				return {
+					render(width: number): string[] {
+						if (cachedLines && cachedWidth === width && cachedSnapshot === snapshot) return cachedLines;
+						cachedWidth = width;
+						cachedSnapshot = snapshot;
+						cachedLines = renderTodoWidget(todoItems, width, theme);
+						return cachedLines;
+					},
+					invalidate(): void {
+						cachedLines = undefined;
+					},
+				};
 			});
-			ctx.ui.setWidget("plan-todos", lines);
 		} else {
 			ctx.ui.setWidget("plan-todos", undefined);
 		}
@@ -311,8 +326,26 @@ After completing each step, call the plan_done tool with that step's number imme
 				ctx.ui.notify("No todos. Create a plan first with /plan", "info");
 				return;
 			}
-			const list = todoItems.map((item, i) => `${i + 1}. ${item.completed ? "✓" : "○"} ${item.text}`).join("\n");
-			ctx.ui.notify(`Plan Progress:\n${list}`, "info");
+
+			if (ctx.mode !== "tui") {
+				const list = todoItems.map((item) => `${item.step}. ${item.completed ? "✓" : "○"} ${item.text}`).join("\n");
+				ctx.ui.notify(`Plan Progress:\n${list}`, "info");
+				return;
+			}
+
+			await ctx.ui.custom<void>(
+				(tui, theme, keybindings, done) => createTodoOverlay(todoItems, { tui, theme, keybindings, done }),
+				{
+					overlay: true,
+					overlayOptions: {
+						width: "80%",
+						maxHeight: OVERLAY_PAGE_ROWS + 5,
+						anchor: "center",
+						margin: 2,
+					},
+					blocked: { kind: "question", message: "Plan todo list" },
+				},
+			);
 		},
 	});
 

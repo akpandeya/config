@@ -11,7 +11,7 @@ and edits are live without re-running setup (Pi reads the files at startup;
 
 | Extension | What it does |
 |---|---|
-| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking and a progress widget |
+| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking and a multi-column progress widget (`/todos` for the full list) |
 | `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
 | `inline-bash.ts` | Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
 | `subagent/` | Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
@@ -101,6 +101,28 @@ Local deviations from upstream:
   and text with `\n` before slicing from the last header, so a thinking draft
   could merge with — or, when the visible text had no header, leak past — the
   final plan (observed live: a 10-step dialog built from 5 + 5 steps).
+- Progress widget rewritten (`todos-view.ts`, new local file): numbered `✓`/`▸`/`☐`
+  steps laid out in 1-4 columns sized so the longest step fits, so a wide
+  terminal shows a 9-step plan in 3 rows instead of 9 rows with a dead right
+  margin. Capped at 5 rows: when the plan can't fit, it shows what fits (skipping
+  clipped text when a column would gut it) and adds `⋯ N more steps · /todos`.
+  Upstream rendered one full-width row per step, truncated at 60 chars with
+  `...`, and no step numbers — which made `plan_done(3)` impossible to follow.
+- Overlong plans window on the **current step**, not the head of the list: rows
+  are `✓ k done · from step k+1` + the remaining steps (+ `⋯ N more` when the
+  remainder is still too long), so ticking a step scrolls the next one into view
+  instead of burying it under rows of completed work. Completed steps are *not*
+  reordered to the bottom — the plan stays 1..N, so `plan_done(n)` maps to a
+  stable row even when steps finish out of order.
+- `/todos` opens a scrollable overlay (`↑/↓`/`j`/`k`, `esc`/`q`/`c` to close)
+  with every step unwrapped and the current one marked; it falls back to the old
+  notification in non-TUI modes.
+- Plan extraction ignores **fenced code** (`stripFencedCode` in `utils.ts`):
+  every fenced block is dropped before headers and numbered lines are matched, and
+  unclosed fences run to end of message. A plan *shown* inside a fence is an
+  illustration (a diff, a doc snippet, a test fixture), not the agent's plan;
+  matching one armed the approval dialog and replaced the live todo list with a
+  step list that was never proposed for execution.
 - `pi/keybindings.json` moves `app.thinking.cycle` to `Alt+T`. Pi reserves
   `Shift+Tab` for that action and would otherwise skip the extension shortcut
   with a conflict warning.
@@ -133,8 +155,11 @@ diff -u "$UP/utils.ts" pi/extensions/plan-mode/utils.ts
 diff -u "$UP/index.ts" pi/extensions/plan-mode/index.ts
 ```
 
-Re-copy upstream, re-apply the deviations above (including the `plan_done`
-tool), then syntax-check the vendored file loads:
+`pi/extensions/plan-mode/todos-view.ts` is local-only (no upstream
+counterpart): it holds the widget layout and the `/todos` overlay component, so
+an upstream `index.ts` drop-in needs the `setWidget` block and the `todos`
+command re-pointed at it. Re-copy upstream, re-apply the deviations above
+(including the `plan_done` tool), then syntax-check the vendored files load:
 
 ```bash
 node -e 'import("/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs").then(async ({ createJiti }) => { const j = createJiti(import.meta.url, { alias: { typebox: "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.mjs" } }); const m = await j.import("pi/extensions/plan-mode/index.ts", { default: true }); console.log(typeof m); })'

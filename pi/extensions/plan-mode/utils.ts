@@ -123,13 +123,41 @@ export function cleanStepText(text: string): string {
 	if (cleaned.length > 0) {
 		cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 	}
-	// Keep full text: the exec message and widget display need the whole step.
-	// The widget truncates for display (see updateStatus in index.ts).
+	// Keep full text: the exec message and the widget both need the whole step.
+	// todos-view.ts wraps it into the available columns (never pre-truncated here).
 	return cleaned;
+}
+
+/**
+ * Drop fenced code regions (``` / ~~~, indented variants included, unclosed
+ * fences run to end of message). A plan *shown* inside a fence is an
+ * illustration — a diff, a doc snippet, a test prompt — not the agent's own
+ * plan. Matching one armed the approval dialog with a step list that was never
+ * proposed for execution (observed: a 23-step test fixture in a reply became
+ * the session's todo list).
+ */
+export function stripFencedCode(text: string): string {
+	const kept: string[] = [];
+	let fence: string | undefined;
+	for (const line of text.split("\n")) {
+		const match = line.trimStart().match(/^(`{3,}|~{3,})/);
+		if (fence === undefined) {
+			if (match) {
+				fence = match[1];
+				continue;
+			}
+			kept.push(line);
+		} else if (match && match[1][0] === fence[0] && match[1].length >= fence.length) {
+			fence = undefined;
+		}
+	}
+	return kept.join("\n");
 }
 
 export function extractTodoItems(message: string): TodoItem[] {
 	const items: TodoItem[] = [];
+	// Ignore plans quoted inside fenced code (see stripFencedCode).
+	const scannable = stripFencedCode(message);
 	// Take the LAST "Plan:" section: since getTextContent includes thinking blocks,
 	// a draft in the reasoning block can precede the user-visible plan in the text
 	// block — the text block comes last in content order.
@@ -138,10 +166,10 @@ export function extractTodoItems(message: string): TodoItem[] {
 	// (\*{0,2}Plan:\*{0,2}\s*\n) also matched prose like "…present the plan:**",
 	// which scraped unrelated numbered lists (e.g. clarifying questions) as
 	// plan steps and fired the approval dialog on non-plans.
-	const headers = [...message.matchAll(/^\s*(?:#{1,6}\s+)?\*{0,2}Plan:?\*{0,2}\s*$/gim)];
+	const headers = [...scannable.matchAll(/^\s*(?:#{1,6}\s+)?\*{0,2}Plan:?\*{0,2}\s*$/gim)];
 	if (headers.length === 0) return items;
 	const lastHeader = headers[headers.length - 1];
-	const planSection = message.slice((lastHeader.index ?? 0) + lastHeader[0].length);
+	const planSection = scannable.slice((lastHeader.index ?? 0) + lastHeader[0].length);
 	// Full-line capture: step titles may contain bold/italic/backticks ("1. **Step** \`x\` …").
 	// cleanStepText strips the markdown; / and - items are still skipped below.
 	const numberedPattern = /^\s*(\d+)[.)]\s+(.+)$/gm;
@@ -175,7 +203,7 @@ export function extractTodoItems(message: string): TodoItem[] {
 export function extractTodoItemsFromBlocks(blocks: string[]): TodoItem[] {
 	const headerRe = /^\s*(?:#{1,6}\s+)?\*{0,2}Plan:?\*{0,2}\s*$/im;
 	for (let i = blocks.length - 1; i >= 0; i--) {
-		if (headerRe.test(blocks[i])) {
+		if (headerRe.test(stripFencedCode(blocks[i]))) {
 			return extractTodoItems(blocks[i]);
 		}
 	}
