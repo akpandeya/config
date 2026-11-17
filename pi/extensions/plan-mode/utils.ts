@@ -291,9 +291,9 @@ export function extractImplementerPick(blocks: string[]): ImplementerPick | unde
 			raw.match(/^(.*?)\s+[—–]\s+(.*)$/) ?? raw.match(/^(.*?):\s+(.*)$/) ?? raw.match(/^(.*?)\s+-\s+(.*)$/);
 		const pick = (split?.[1] ?? raw).trim();
 		const reason = (split?.[2] ?? "").trim();
-		if (pick) return { pick, reason, // Not followed by a word char or hyphen, so "review: skip-tuning" is not a
-// skip request.
-reviewSkip: /\breview:\s*skip(?:ped)?\b(?![\w-])/i.test(raw) };
+		// Not followed by a word char or hyphen, so "review: skip-tuning" is not
+		// a skip request.
+		if (pick) return { pick, reason, reviewSkip: /\breview:\s*skip(?:ped)?\b(?![\w-])/i.test(raw) };
 	}
 	return undefined;
 }

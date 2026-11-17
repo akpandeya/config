@@ -542,9 +542,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (reviewer === "skip") {
 			const why = !firstRound
 				? "manual bail-out after a changes-requested round"
-				: plannerReviewSkip
-					? "planner-suggested (`; review: skip` on the Implementer line)"
-					: "trivial/mechanical plan";
+				: !suggestSkip
+					? "manually skipped"
+					: plannerReviewSkip
+						? "planner-suggested (`; review: skip` on the Implementer line)"
+						: "trivial/mechanical plan";
 			await skipReview(ctx, why);
 			return;
 		}
@@ -1192,7 +1194,8 @@ For trivial, mechanical, or debug-only changes that do not need a review, you
 may append \`; review: skip\` to the Implementer line, for example:
 Implementer: glm-5.3-flash — mechanical symlink fix; review: skip
 This marks the first review pass as skippable (the user still confirms it in
-the review dialog). It never applies after a reviewer has requested changes:
+the review dialog; headless runs skip automatically). It never applies after
+a reviewer has requested changes:
 a re-review always runs then unless the user skips it manually.
 
 Implementation models:
