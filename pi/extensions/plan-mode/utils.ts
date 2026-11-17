@@ -88,6 +88,9 @@ const SAFE_PATTERNS = [
 	/^\s*python\s+--version/i,
 	/^\s*curl\s/i,
 	/^\s*wget\s+-O\s*-/i,
+	// Jira CLI read-only lookups (view/list/board/sprint/comment list).
+	// Positive allowlist: create/edit/move/etc. never match and stay blocked.
+	/^\s*jira\s+(view|list|issue\s+view|issue\s+list|board|sprint|comment\s+list)\b/,
 	/^\s*jq\b/,
 	/^\s*sed\s+-n/i,
 	/^\s*awk\b/,
@@ -248,4 +251,124 @@ export function allStepsComplete(message: string): boolean {
 		/(?:all|every)\s+steps?\s+(?:are|is\s+)?(?:done|complete|completed|finished)/i.test(message) ||
 		/\b(?:the\s+)?plan\s+(?:is\s+)?(?:complete|completed|done)\b/i.test(message)
 	);
+}
+
+export interface ImplementerPick {
+	/** Model id or name the planner named for implementation. */
+	pick: string;
+	/** Short reason after the dash; empty when the planner omitted it. */
+	reason: string;
+}
+
+/**
+ * The planner ends its plan with one unnumbered line naming an implementer:
+ *
+ *   Implementer: Claude Sonnet 5.5 — cross-cutting auth changes
+ *
+ * Fenced examples are ignored (the plan itself may show the line in a code
+ * block), and the last match wins so a revised plan can change its pick.
+ */
+export function extractImplementerPick(blocks: string[]): ImplementerPick | undefined {
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		const scannable = stripFencedCode(blocks[i]);
+		const matches = [...scannable.matchAll(/^[ \t]*Implementer:[ \t]*(.+)$/gim)];
+		const match = matches.at(-1);
+		if (!match) continue;
+
+		// Strip emphasis/code markers, then split on a spaced dash (em/en) or a
+		// colon. Model names contain hyphens without spaces ("GPT-6 Luna"), so
+		// they stay intact.
+		const raw = match[1].replace(/[`*]/g, "").trim();
+		if (!raw) continue;
+		const split =
+			raw.match(/^(.*?)\s+[—–]\s+(.*)$/) ?? raw.match(/^(.*?):\s+(.*)$/) ?? raw.match(/^(.*?)\s+-\s+(.*)$/);
+		const pick = (split?.[1] ?? raw).trim();
+		const reason = (split?.[2] ?? "").trim();
+		if (pick) return { pick, reason };
+	}
+	return undefined;
+}
+
+interface ModelChoiceCandidate {
+	model: { id: string; name: string };
+}
+
+/**
+ * Resolve a loose model mention to one of the candidates: exact id/name first,
+ * then a prefix in either direction, preferring the longest match so
+ * "Kimi K3" cannot win over "Kimi K3.1 Pro" when both are offered.
+ */
+export function matchModelChoice<T extends ModelChoiceCandidate>(
+	pick: string,
+	candidates: readonly T[],
+): T | undefined {
+	const normalized = pick.trim().toLowerCase().replace(/[`*]/g, "");
+	if (!normalized) return undefined;
+
+	let best: { candidate: T; score: number; length: number } | undefined;
+	for (const candidate of candidates) {
+		const id = candidate.model.id.toLowerCase();
+		const name = candidate.model.name.toLowerCase();
+		let score = -1;
+		if (id === normalized || name === normalized) score = 0;
+		else if (id.startsWith(normalized) || name.startsWith(normalized)) score = 1;
+		else if (normalized.startsWith(id) || normalized.startsWith(name)) score = 2;
+		if (score === -1) continue;
+
+		const length = Math.max(id.length, name.length);
+		if (!best || score < best.score || (score === best.score && length > best.length)) {
+			best = { candidate, score, length };
+		}
+	}
+	return best?.candidate;
+}
+
+export interface ReviewVerdict {
+	approved: boolean;
+	/** `CHANGES NEEDED` findings; empty on approval. */
+	findings: string[];
+}
+
+/**
+ * The reviewer ends its turn with `Verdict: APPROVED` or
+ * `Verdict: CHANGES NEEDED` followed by bullet findings. Fenced examples are
+ * ignored, the last verdict wins, and findings fall back to the whole block
+ * when the reviewer puts the verdict line last.
+ */
+export function extractReviewVerdict(blocks: string[]): ReviewVerdict | undefined {
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		const text = stripFencedCode(blocks[i]);
+		const matches = [
+			...text.matchAll(
+				/^[ \t]*(?:#{1,6}[ \t]*)?\*{0,2}[ \t]*Verdict:[ \t]*\*{0,2}[ \t]*(APPROVED|CHANGES[ \t]+NEEDED)[ \t]*\*{0,2}[ \t]*$/gim,
+			),
+		];
+		const match = matches.at(-1);
+		if (!match) continue;
+
+		// A qualified verdict ("Verdict: APPROVED, but ...") is not an approval:
+		// the end anchor above makes it a malformed verdict, which callers treat
+		// as no verdict rather than silently approving.
+		const approved = match[1].toUpperCase() === "APPROVED";
+		const previous = matches.at(-2);
+		const sectionStart = previous ? (previous.index ?? 0) + previous[0].length : 0;
+		const beforeVerdict = text.slice(sectionStart, match.index ?? 0);
+		const after = text.slice((match.index ?? 0) + match[0].length);
+		const bullets = (chunk: string): string[] =>
+			chunk
+				.split("\n")
+				.map((line) => line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.+)$/)?.[1]?.replace(/[`*]/g, "").trim())
+				.filter((line): line is string => Boolean(line));
+
+		let findings = approved ? [] : bullets(after);
+		// Fall back only within this verdict's own section, so bullets from an
+		// earlier (already resolved) verdict are not resurrected as findings.
+		if (!approved && findings.length === 0) findings = bullets(beforeVerdict);
+		if (!approved && findings.length === 0) {
+			const prose = beforeVerdict.trim();
+			if (prose) findings = [prose.slice(0, 4000)];
+		}
+		return { approved, findings };
+	}
+	return undefined;
 }
