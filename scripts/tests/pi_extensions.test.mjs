@@ -240,3 +240,116 @@ test("child argv omits --readonly-bash when the agent does not set bashAllowlist
 	assert.ok(!args.includes("--readonly-bash"), `args: ${JSON.stringify(args)}`);
 	assert.ok(args.includes("--tools"), "--tools still passed");
 });
+
+/* ------------------------------------------------------------------ */
+/* role-models: machine-agnostic resolver                              */
+/* ------------------------------------------------------------------ */
+
+const roleModels = await jiti.import(path.join(ROOT, "pi/extensions/plan-mode/role-models.ts"), { default: false });
+
+function makeModel(provider, id, name, { inputCost = 1, outputCost = 2, contextWindow = 200_000, reasoning = true, input = ["text"] } = {}) {
+	return { provider, id, name, api: "openai-completions", cost: { input: inputCost, output: outputCost }, contextWindow, reasoning, input };
+}
+
+/** Stub the slice of ExtensionContext resolveRoleModels touches. */
+function makeCtx(models, current = models[0]) {
+	return {
+		model: current,
+		modelRegistry: {
+			getAvailable: () => models,
+			find: (provider, id) => models.find((m) => m.provider === provider && m.id === id),
+		},
+	};
+}
+
+const OFFICE = [
+	makeModel("ai-model-router", "GLM 5.3 Flash", "GLM 5.3 Flash", { inputCost: 0.15, outputCost: 0.5 }),
+	makeModel("ai-model-router", "Heavy", "Heavy", { inputCost: 5, outputCost: 25 }),
+	makeModel("ai-model-router", "Kimi K3.1 Pro", "Kimi K3.1 Pro", { inputCost: 1, outputCost: 5, contextWindow: 256_000 }),
+];
+
+const HOME = [
+	makeModel("openrouter", "z-ai/glm-5.3-flash", "Z.ai: GLM 5.3 Flash", { inputCost: 0.1, outputCost: 0.4 }),
+	makeModel("openrouter", "z-ai/glm-5.3", "Z.ai: GLM 5.3", { inputCost: 0.3, outputCost: 1 }),
+	makeModel("openrouter", "moonshotai/kimi-k3.1-pro", "MoonshotAI: Kimi K3.1 Pro", { inputCost: 1, outputCost: 5, contextWindow: 256_000 }),
+	makeModel("openrouter", "deepseek/deepseek-v4.1-flash", "DeepSeek: DeepSeek V4.1 Flash", { inputCost: 0.05, outputCost: 0.567 }),
+	makeModel("openrouter", "vendor/whopper", "Vendor: Whopper", { inputCost: 9, outputCost: 40, contextWindow: 130_000 }),
+	makeModel("openrouter", "black-forest-labs/flux-3-image", "Black Forest Labs: FLUX 3 Image", { inputCost: 0.02, outputCost: 0.02, reasoning: false, input: ["image"] }),
+];
+
+function resolvedModels(ctx, specs) {
+	return roleModels.resolveRoleModels(ctx, specs).map((r) => `${r.model.provider}/${r.model.id}`);
+}
+
+test("exact provider/id match is untouched (office machine)", () => {
+	assert.deepEqual(resolvedModels(makeCtx(OFFICE), roleModels.REVIEWER_MODELS.slice(0, 2)), [
+		"ai-model-router/Kimi K3.1 Pro",
+		"ai-model-router/GLM 5.3 Flash",
+	]);
+});
+
+test("vendor prefixes resolve on a foreign catalog (home machine)", () => {
+	const got = resolvedModels(makeCtx(HOME), [
+		{ provider: "ai-model-router", id: "GLM 5.3 Flash", note: "" },
+		{ provider: "ai-model-router", id: "Kimi K3.1 Pro", note: "" },
+	]);
+	assert.deepEqual(got, ["openrouter/z-ai/glm-5.3-flash", "openrouter/moonshotai/kimi-k3.1-pro"]);
+});
+
+test("tier fallback ranks the local catalog; image models excluded", () => {
+	const got = resolvedModels(makeCtx(HOME), [
+		{ provider: "none", id: "Heavy", note: "", tier: "strong" },
+		{ provider: "none", id: "GPT-6 Luna", note: "", tier: "cheap" },
+	]);
+	// strong = priciest reasoning model; cheap = lowest avg cost (GLM Flash $0.25 < DeepSeek $0.31)
+	assert.deepEqual(got, ["openrouter/vendor/whopper", "openrouter/z-ai/glm-5.3-flash"]);
+});
+
+test("image-only models never win a tier", () => {
+	const flux = makeModel("openrouter", "vendor/pricey-image", "Vendor: Pricey Image", { inputCost: 50, outputCost: 50, reasoning: false, input: ["image"] });
+	const got = resolvedModels(makeCtx([flux, ...HOME]), [{ provider: "none", id: "Heavy", note: "", tier: "strong" }]);
+	assert.deepEqual(got, ["openrouter/vendor/whopper"]);
+});
+
+test("tier prefers the orchestrator's provider", () => {
+	// big/one is pricier (would win on cost alone) but sits on another provider;
+	// affinity must still pick the openrouter model.
+	const other = [makeModel("other", "big/one", "Big One", { inputCost: 20, outputCost: 80 }), ...HOME];
+	const got = resolvedModels(makeCtx(other, HOME[0]), [{ provider: "none", id: "Heavy", note: "", tier: "strong" }]);
+	assert.deepEqual(got, ["openrouter/vendor/whopper"]);
+});
+
+test("long tier picks the largest context window", () => {
+	const got = resolvedModels(makeCtx(HOME), [{ provider: "none", id: "Vendor X", note: "", tier: "long" }]);
+	assert.deepEqual(got, ["openrouter/moonshotai/kimi-k3.1-pro"]);
+});
+
+test("numeric words must match exactly: Opus 5.5 never grabs Opus 4.5", () => {
+	const mixed = [makeModel("p", "claude-opus-4.5", "Claude Opus 4.5")];
+	const got = resolvedModels(makeCtx(mixed), [{ provider: "q", id: "Claude Opus 5.5", note: "" }]);
+	assert.deepEqual(got, []);
+});
+
+test("unmatchable spec without a tier is dropped, not fatal", () => {
+	// GLM 5.3 does fuzzy-match z-ai/glm-5.3; GPT-6.1 Sol exists on no other machine.
+	const got = resolvedModels(makeCtx(HOME), [
+		{ provider: "none", id: "GLM 5.3", note: "" },
+		{ provider: "none", id: "GPT-6.1 Sol", note: "" },
+		{ provider: "ai-model-router", id: "GLM 5.3 Flash", note: "" },
+	]);
+	assert.deepEqual(got, ["openrouter/z-ai/glm-5.3", "openrouter/z-ai/glm-5.3-flash"]);
+});
+
+test("duplicates collapse: no model appears twice in a resolved menu", () => {
+	const got = resolvedModels(makeCtx(HOME), roleModels.IMPLEMENTER_MODELS);
+	assert.ok(got.includes("openrouter/z-ai/glm-5.3-flash"));
+	assert.deepEqual([...new Set(got)], got);
+});
+
+test("agent files carry no machine-pinned model", () => {
+	const dir = path.join(ROOT, "pi/extensions/subagent/agents");
+	for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+		const fm = fs.readFileSync(path.join(dir, file), "utf-8").split("---")[1] ?? "";
+		assert.ok(!/^model:/m.test(fm), `${file} must not pin a model (breaks other machines)`);
+	}
+});

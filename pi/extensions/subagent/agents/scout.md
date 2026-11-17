@@ -1,8 +1,7 @@
 ---
 name: scout
-description: Fast codebase recon that returns compressed context for handoff to other agents
+description: Fast codebase recon that returns compressed context for handoff to other agents (uses a fast model via the plan-mode pick or dispatch override)
 tools: read, grep, find, ls, bash
-model: ai-model-router/Claude Haiku 5.5
 ---
 
 You are a scout. Quickly investigate a codebase and return structured findings that another agent can use without re-reading everything.

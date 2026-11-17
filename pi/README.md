@@ -173,6 +173,17 @@ Local deviations from upstream:
   dialogs are skipped and the defaults apply. The footer appends the live
   model (`⏸ plan · GLM 5.3 Flash`, `📋 2/5 · Sonnet 5.5`,
   `🔍 review · Kimi K3.1 Pro`).
+
+  The menus are written against the HF model router but resolve
+  machine-agnostically (`resolveRoleModels`): exact `provider/id` match first
+  (the work PC resolves everything here), then vendor-prefix fuzzy matching
+  (`MoonshotAI: Kimi K3.1 Pro` ≡ `Kimi K3.1 Pro`, `z-ai/glm-5.3-flash` ≡
+  `GLM 5.3 Flash`), then capability-tier fallback for names that exist on no
+  other machine — `Heavy`/`Opus` → priciest reasoning model, `GPT-6 Luna` →
+  cheapest, Kimi → largest context window. Fuzzy/tier matches prefer the
+  orchestrator's current provider, so resolved models always have credentials
+  on the machine in use. Unmatchable specs without a tier are dropped from
+  the picker, never fatal.
 - **Implementer recommendation in the prompt**: plan mode injects the
   implementer menu (ids + catalog prices) and asks for one unnumbered
   `Implementer: <id> — <reason>` line after the plan. `extractImplementerPick`
@@ -225,10 +236,11 @@ diff -ur "$UP/subagent" pi/extensions/subagent
 differs from upstream — its deviations are documented in
 `pi/extensions/subagent/README.md`. In short: the `reviewer` agent enforces a
 `Verdict: CLEAN` / `Verdict: FINDINGS (n)` contract, a local-only
-`reviewer-strong` agent (pinned to `ai-model-router/Claude Opus 5.5`) backs
-the escalation path of the `/implement-and-review` loop, and model pins that
-don't exist on the HF model router were dropped (agents without a pin inherit
-the dispatching session's model). Agents whose frontmatter sets
+`reviewer-strong` agent backs the escalation path of the
+`/implement-and-review` loop. Agent files carry no model pins: agents inherit
+the dispatching session's model (a pin hardcodes a provider and breaks on any
+other machine — use the per-dispatch `model` override or plan-mode's
+phase-based routing instead). Agents whose frontmatter sets
 `bashAllowlist: true` (currently `reviewer`) run the child with
 `--readonly-bash`, and the local-only `readonly-bash.ts` extension then
 tool-enforces the plan-mode bash allowlist in that child — closing the gap
