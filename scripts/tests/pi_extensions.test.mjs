@@ -405,3 +405,54 @@ test("last Implementer line wins when several carry the marker", () => {
 	assert.equal(pick?.pick, "b");
 	assert.equal(pick?.reviewSkip, false);
 });
+
+/* ------------------------------------------------------------------ */
+/* plan-mode: Reviewer line (reviewer pick + rounds budget)             */
+/* ------------------------------------------------------------------ */
+
+test("Reviewer line with rounds budget", () => {
+	const pick = planUtils.extractReviewerPick(["Reviewer: Kimi K3.1 Pro — deep review; rounds: 3"]);
+	assert.equal(pick?.pick, "Kimi K3.1 Pro");
+	assert.equal(pick?.reason, "deep review");
+	assert.equal(pick?.rounds, 3);
+});
+
+test("Reviewer line without a rounds clause", () => {
+	const pick = planUtils.extractReviewerPick(["Reviewer: GLM 5.3 Flash — cheap pass over a small diff"]);
+	assert.equal(pick?.pick, "GLM 5.3 Flash");
+	assert.equal(pick?.reason, "cheap pass over a small diff");
+	assert.equal(pick?.rounds, undefined);
+});
+
+test("Reviewer line without a dash keeps the whole value as the pick", () => {
+	const pick = planUtils.extractReviewerPick(["Reviewer: Kimi K3.1 Pro; rounds: 2"]);
+	assert.equal(pick?.pick, "Kimi K3.1 Pro");
+	assert.equal(pick?.reason, "");
+	assert.equal(pick?.rounds, 2);
+});
+
+test("non-numeric rounds is ignored, not parsed", () => {
+	const pick = planUtils.extractReviewerPick(["Reviewer: Kimi K3.1 Pro — rounds: many"]);
+	assert.equal(pick?.pick, "Kimi K3.1 Pro");
+	assert.equal(pick?.rounds, undefined);
+	assert.equal(pick?.reason, "rounds: many");
+});
+
+test("Reviewer line inside a fenced code block is ignored; last line wins", () => {
+	const blocks = [
+		"Plan:\n1. Step\n\n```\nReviewer: Kimi K3.1 Pro — example; rounds: 5\n```\n\nReviewer: Claude Opus 5.5 — real pick; rounds: 3",
+	];
+	const pick = planUtils.extractReviewerPick(blocks);
+	assert.equal(pick?.pick, "Claude Opus 5.5");
+	assert.equal(pick?.rounds, 3);
+});
+
+test("revision override: the last Reviewer line wins (handler clears when none is left)", () => {
+	const revised = planUtils.extractReviewerPick(["Reviewer: Kimi K3.1 Pro — deep; rounds: 3", "Reviewer: GLM 5.3 Flash — cheap pass"]);
+	assert.equal(revised?.pick, "GLM 5.3 Flash");
+	assert.equal(revised?.rounds, undefined);
+});
+
+test("no Reviewer line at all returns undefined", () => {
+	assert.equal(planUtils.extractReviewerPick(["Plan:\n1. Step"]), undefined);
+});

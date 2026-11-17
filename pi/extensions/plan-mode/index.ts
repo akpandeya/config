@@ -19,9 +19,10 @@
  *   in 1-4 columns to use the terminal width, capped at MAX_WIDGET_ROWS rows
  *   with the remainder behind /todos (see todos-view.ts)
  * - /todos opens the full list in a scrollable overlay
- * - Role-based models: planner picker on the first plan turn, implementer picker
- *   on approval, deep-review pass after the last step, then the orchestrator
- *   model is restored (see role-models.ts)
+ * - Role-based models: planner picker on the first plan turn, implementer,
+ *   reviewer, and review-round pickers together on approval (deciding the
+ *   reviewer and round budget upfront keeps execution + the review loop free of
+ *   further dialogs), then the orchestrator model is restored (role-models.ts)
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -45,12 +46,14 @@ import {
 import {
 	allStepsComplete,
 	extractImplementerPick,
+	extractReviewerPick,
 	extractReviewVerdict,
 	extractTodoItemsFromBlocks,
 	isSafeCommand,
 	markCompletedSteps,
 	matchModelChoice,
 	type ImplementerPick,
+	type ReviewerPick,
 	type TodoItem,
 } from "./utils.ts";
 
@@ -88,12 +91,18 @@ interface PlanModeState {
 	reviewer?: SavedModel;
 	reviewing?: boolean;
 	reviewRound?: number;
+	/** Review rounds allowed before the loop reports instead of fixing. */
+	reviewRoundLimit?: number;
+	/** "Skip review" was chosen in the approval-time review dialog. */
+	reviewSkipUpfront?: boolean;
 	toolsBeforeReview?: string[];
 	mutated?: boolean;
 }
 
-/** Review rounds before the extension stops asking for fixes and reports instead. */
-const MAX_REVIEW_ROUNDS = 2;
+/** Default review rounds before the extension stops asking for fixes and reports instead. */
+const DEFAULT_REVIEW_ROUNDS = 2;
+/** Upper bound for the approval-time review-rounds picker (and planner `rounds:` picks). */
+const MAX_REVIEW_ROUNDS = 5;
 
 // Type guard for assistant messages
 function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
@@ -142,15 +151,23 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let reviewerModel: SavedModel | undefined;
 	let reviewing = false;
 	let reviewRound = 0;
+	// Review-round budget and upfront skip, both decided in the approval-time
+	// review dialog so the implementation -> review -> fix -> re-review loop runs
+	// without further dialogs.
+	let reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
+	let reviewSkipUpfront = false;
 	let toolsBeforeReview: string[] | undefined;
 	// Set by tool results during execution: a plan that never mutated anything
 	// skips the review pass.
 	let mutatedThisExecution = false;
 	let lastImplementerPick: ImplementerPick | undefined;
 	// The planner's `; review: skip` annotation on the Implementer line: the
-	// first review pass is offered as the starred dialog choice (auto-skipped
-	// headless). Cleared whenever the pick is cleared or re-parsed.
+	// review dialog stars "Skip review" (headless runs skip automatically).
+	// Cleared whenever the pick is cleared or re-parsed.
 	let plannerReviewSkip = false;
+	// The planner's `Reviewer:` line, re-parsed on every plan presentation; it
+	// stars the reviewer picker and suggests the round count.
+	let lastReviewerPick: ReviewerPick | undefined;
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
@@ -164,7 +181,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		// Footer status
 		if (executionMode && todoItems.length > 0) {
 			const completed = todoItems.filter((t) => t.completed).length;
-			const label = reviewing ? "🔍 review" : `📋 ${completed}/${todoItems.length}`;
+			const label = reviewing ? `🔍 review ${reviewRound}/${reviewRoundLimit}` : `📋 ${completed}/${todoItems.length}`;
 			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `${label}${model}`));
 		} else if (planModeEnabled) {
 			ctx.ui.setStatus(
@@ -455,39 +472,73 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	/** Return sentinel for the "⏭ Skip review" dialog choice (distinct from undefined = no candidates). */
 	type ReviewerChoice = Model<Api> | "skip" | undefined;
 
-	async function chooseReviewerModel(
-		ctx: ExtensionContext,
-		firstRound: boolean,
-		suggestSkip: boolean,
-	): Promise<ReviewerChoice> {
+	/**
+	 * Approval-time pick (asked once, right after the implementer picker): with
+	 * the reviewer decided upfront the implementation -> review -> fix loop runs
+	 * without further dialogs. The planner's `Reviewer:` line stars its pick;
+	 * otherwise the automatic heuristic suggests one.
+	 */
+	async function chooseReviewerModel(ctx: ExtensionContext): Promise<ReviewerChoice> {
 		const candidates = resolveRoleModels(ctx, REVIEWER_MODELS);
 		if (candidates.length === 0) return undefined;
 
-		const suggested = automaticReviewer(candidates) ?? candidates[0];
+		const plannerSuggested = lastReviewerPick ? matchModelChoice(lastReviewerPick.pick, candidates) : undefined;
+		const suggested = plannerSuggested ?? automaticReviewer(candidates) ?? candidates[0];
 		if (!suggested) return undefined;
 		const ordered = [suggested, ...candidates.filter((candidate) => candidate !== suggested)];
 		// Headless (no dialog possible): auto-skip only on an explicit planner
-		// annotation for the first round — the trivial heuristic alone never skips
-		// silently, and post-FINDINGS rounds always review.
-		if (!ctx.hasUI) return firstRound && plannerReviewSkip ? "skip" : suggested.model;
+		// annotation — the trivial heuristic alone never skips silently.
+		if (!ctx.hasUI) return plannerReviewSkip ? "skip" : suggested.model;
 
+		const starred = !plannerReviewSkip;
 		const modelOptions = ordered.map(
 			(candidate, index) =>
-				`${index === 0 && !suggestSkip ? "★ " : "  "}${describeRoleModel(candidate)}${
-					index === 0 && !suggestSkip ? " — suggested" : ""
+				`${index === 0 && starred ? "★ " : "  "}${describeRoleModel(candidate)}${
+					index === 0 && starred
+						? ` — suggested${plannerSuggested ? ` by plan: ${lastReviewerPick?.reason || "reviewer pick"}` : ""}`
+						: ""
 				}`,
 		);
-		const skipLabel = suggestSkip
-			? "★ ⏭ Skip review — trivial/mechanical"
-			: firstRound
-				? "  ⏭ Skip review"
-				: "  ⏭ Skip review — manual bail-out";
+		const skipLabel = plannerReviewSkip
+			? "★ ⏭ Skip review — planner suggested (`; review: skip`)"
+			: "  ⏭ Skip review";
 		const options = [skipLabel, ...uniqueLabels(modelOptions, ordered)];
 		const choice = await ctx.ui.select("Review with which model?", options);
 		if (choice === skipLabel) return "skip";
 		const model = options.indexOf(choice) > 0 ? ordered[options.indexOf(choice) - 1]?.model : undefined;
-		// Cancel (undefined) keeps today's behavior: run with the suggested model.
+		// Cancel (undefined) keeps the previous behavior: run with the suggested model.
 		return model ?? suggested.model;
+	}
+
+	/**
+	 * Review-round suggestion: the planner's `rounds:` pick wins; otherwise the
+	 * plan's size decides — trivial plans rarely need more than one pass, big or
+	 * risky plans benefit from a spare round after fixes.
+	 */
+	function suggestedReviewRounds(): number {
+		if (lastReviewerPick?.rounds) return Math.min(MAX_REVIEW_ROUNDS, Math.max(1, lastReviewerPick.rounds));
+		const trivial = todoItems.length <= 2 || implementerModel?.id === "GPT-6 Luna";
+		if (trivial) return 1;
+		const risky =
+			todoItems.length >= 6 || implementerModel?.id === "Heavy" || implementerModel?.id === "Claude Opus 5.5";
+		return risky ? 3 : DEFAULT_REVIEW_ROUNDS;
+	}
+
+	/** Approval-time round budget, asked right after the reviewer picker. */
+	async function chooseReviewRounds(ctx: ExtensionContext): Promise<number> {
+		const suggested = suggestedReviewRounds();
+		if (!ctx.hasUI) return suggested;
+		const suffix = lastReviewerPick?.rounds ? " — planner suggested" : " — suggested";
+		const options: string[] = [];
+		for (let n = 1; n <= MAX_REVIEW_ROUNDS; n++) {
+			options.push(`${n === suggested ? "★ " : "  "}${n} round${n === 1 ? "" : "s"}${n === suggested ? suffix : ""}`);
+		}
+		const choice = await ctx.ui.select(
+			"How many review rounds before it reports findings instead of fixing?",
+			options,
+		);
+		const picked = choice === undefined ? undefined : Number(choice.match(/^★?\s*(\d+)/)?.[1]);
+		return picked && picked >= 1 && picked <= MAX_REVIEW_ROUNDS ? picked : suggested;
 	}
 
 	async function skipReview(ctx: ExtensionContext, why: string): Promise<void> {
@@ -515,9 +566,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		reviewing = false;
 		awaitingAnswers = false;
 		reviewRound = 0;
+		reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
+		reviewSkipUpfront = false;
 		mutatedThisExecution = false;
 		todoItems = [];
 		lastImplementerPick = undefined;
+		lastReviewerPick = undefined;
 		plannerReviewSkip = false;
 		plannerModel = undefined;
 		implementerIsolated = false;
@@ -531,25 +585,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	}
 
 	async function beginReview(ctx: ExtensionContext): Promise<void> {
-		// Skip eligibility is decided before the round counter advances: the
-		// starred offer is a first-round convenience; a re-review after FINDINGS
-		// only gets the unstarred manual bail-out.
-		const firstRound = reviewRound === 0;
-		const trivial = todoItems.length <= 2 || implementerModel?.id === "GPT-6 Luna";
-		const suggestSkip = firstRound && (plannerReviewSkip || trivial);
 		reviewRound += 1;
-		const reviewer = await chooseReviewerModel(ctx, firstRound, suggestSkip);
-		if (reviewer === "skip") {
-			const why = !firstRound
-				? "manual bail-out after a changes-requested round"
-				: !suggestSkip
-					? "manually skipped"
-					: plannerReviewSkip
-						? "planner-suggested (`; review: skip` on the Implementer line)"
-						: "trivial/mechanical plan";
+		// The reviewer and skip decision were made at approval time; the loop
+		// below (review -> fixes -> re-review) runs without further dialogs.
+		if (reviewSkipUpfront) {
+			const why = plannerReviewSkip
+				? "planner-suggested (`; review: skip` on the Implementer line)"
+				: "skipped in the approval-time review dialog";
 			await skipReview(ctx, why);
 			return;
 		}
+		const reviewer = reviewerModel ? ctx.modelRegistry.find(reviewerModel.provider, reviewerModel.id) : undefined;
 		if (!reviewer) {
 			await completePlan(ctx);
 			return;
@@ -637,11 +683,11 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 			await completePlan(ctx);
 			return;
 		}
-		if (reviewRound >= MAX_REVIEW_ROUNDS) {
+		if (reviewRound >= reviewRoundLimit) {
 			pi.sendMessage(
 				{
 					customType: "plan-review-report",
-					content: `**Review still requests changes after ${reviewRound} round(s).**\n\n${verdict.findings.map((finding) => `- ${finding}`).join("\n") || "(no findings listed)"}`,
+					content: `**Review still requests changes after ${reviewRound} round(s) (limit ${reviewRoundLimit}).**\n\n${verdict.findings.map((finding) => `- ${finding}`).join("\n") || "(no findings listed)"}`,
 					display: true,
 				},
 				{ deliverAs: "nextTurn" },
@@ -700,6 +746,8 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 			reviewer: reviewerModel,
 			reviewing,
 			reviewRound,
+			reviewRoundLimit,
+			reviewSkipUpfront,
 			toolsBeforeReview,
 			mutated: mutatedThisExecution,
 		});
@@ -719,8 +767,11 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		todoItems = [];
 		plannerChosen = false;
 		lastImplementerPick = undefined;
+		lastReviewerPick = undefined;
 		plannerReviewSkip = false;
 		reviewRound = 0;
+		reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
+		reviewSkipUpfront = false;
 		plannerModel = undefined;
 		implementerIsolated = false;
 
@@ -749,8 +800,11 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		if (!fromExecution) {
 			plannerChosen = false;
 			lastImplementerPick = undefined;
+			lastReviewerPick = undefined;
 			plannerReviewSkip = false;
 			reviewRound = 0;
+			reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
+			reviewSkipUpfront = false;
 			plannerModel = undefined;
 		} else if (plannerModel) {
 			// Re-entering plan mode from execution: plan revisions belong to the
@@ -881,6 +935,35 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 				beginExecution(ctx);
 			}
 
+			// Reviewer and round budget, asked right after the implementer picker so
+			// execution and the review loop run through without further dialogs.
+			// Both re-ask on every approval, so a revise → re-approve cycle can
+			// change its mind.
+			const reviewerChoice = await chooseReviewerModel(ctx);
+			if (reviewerChoice === "skip") {
+				reviewSkipUpfront = true;
+				reviewerModel = undefined;
+			} else if (reviewerChoice) {
+				reviewSkipUpfront = false;
+				reviewerModel = {
+					provider: reviewerChoice.provider,
+					id: reviewerChoice.id,
+					thinkingLevel: ROLE_THINKING.reviewer,
+				};
+			} else {
+				// No reviewer model resolved on this machine: skip rather than block.
+				reviewSkipUpfront = true;
+				reviewerModel = undefined;
+			}
+			reviewRoundLimit = await chooseReviewRounds(ctx);
+			persistState();
+			ctx.ui.notify(
+				reviewerModel
+					? `Reviewer: ${modelKey(reviewerModel)} · up to ${reviewRoundLimit} review round(s).`
+					: `Review skipped · up to ${reviewRoundLimit} review round(s).`,
+				"info",
+			);
+
 			const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
 			const workerModel = modelKey(implementer.model);
 			const how = implementer.isolated
@@ -999,7 +1082,10 @@ ${how}`;
 				planModeEnabled = false;
 				plannerChosen = false;
 				lastImplementerPick = undefined;
+				lastReviewerPick = undefined;
 				plannerReviewSkip = false;
+				reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
+				reviewSkipUpfront = false;
 				restoreNormalModeTools();
 				await restoreOrchestrator(ctx);
 				updateStatus(ctx);
@@ -1124,6 +1210,12 @@ genuinely blocking a sensible plan — otherwise do not ask again.`
 						`- ${candidate.model.id} — ${formatModelCost(candidate.model)} — ${candidate.note}`,
 				)
 				.join("\n");
+			const reviewerMenu = resolveRoleModels(ctx, REVIEWER_MODELS)
+				.map(
+					(candidate) =>
+						`- ${candidate.model.id} — ${formatModelCost(candidate.model)} — ${candidate.note}`,
+				)
+				.join("\n");
 			if (awaitingAnswers) {
 				// The user's reply to our clarifying questions just arrived; the note
 				// above tells the agent to plan now. Clear so later turns don't keep
@@ -1193,13 +1285,27 @@ keeping its own model. The user confirms the pick before anything runs.
 For trivial, mechanical, or debug-only changes that do not need a review, you
 may append \`; review: skip\` to the Implementer line, for example:
 Implementer: glm-5.3-flash — mechanical symlink fix; review: skip
-This marks the first review pass as skippable (the user still confirms it in
-the review dialog; headless runs skip automatically). It never applies after
+This pre-selects "Skip review" in the approval-time review dialog (headless
+runs skip automatically). It never applies after
 a reviewer has requested changes:
 a re-review always runs then unless the user skips it manually.
 
+Optionally add one more unnumbered line naming a reviewer and a review budget:
+
+Reviewer: <model id> — <one-line reason>; rounds: <1-5>
+
+rounds is how many review passes may run before the session reports findings
+instead of fixing them: 1 for trivial, mechanically verifiable plans, 2 for
+ordinary work, 3+ for risky or cross-cutting plans. Omit the Reviewer line
+when the plan needs no review (\`; review: skip\` above) or you have no
+preference — the user confirms both picks in the approval dialog before
+anything runs.
+
 Implementation models:
 ${implementerMenu}
+
+Reviewer models:
+${reviewerMenu}
 
 Do NOT attempt to make changes - just describe what you would do. Then stop and
 wait: the user approves, keeps planning, or asks for a revision, and every
@@ -1317,6 +1423,7 @@ ${how}`,
 				// the previous recommendation instead of inheriting it.
 				lastImplementerPick = extractImplementerPick(blocks);
 				plannerReviewSkip = lastImplementerPick?.reviewSkip ?? false;
+				lastReviewerPick = extractReviewerPick(blocks);
 			}
 		}
 
@@ -1381,6 +1488,8 @@ ${how}`,
 			reviewerModel = planModeEntry.data.reviewer ?? reviewerModel;
 			reviewing = planModeEntry.data.reviewing ?? reviewing;
 			reviewRound = planModeEntry.data.reviewRound ?? reviewRound;
+			reviewRoundLimit = planModeEntry.data.reviewRoundLimit ?? DEFAULT_REVIEW_ROUNDS;
+			reviewSkipUpfront = planModeEntry.data.reviewSkipUpfront ?? reviewSkipUpfront;
 			toolsBeforeReview = planModeEntry.data.toolsBeforeReview ?? toolsBeforeReview;
 			mutatedThisExecution = planModeEntry.data.mutated ?? mutatedThisExecution;
 		}

@@ -11,7 +11,7 @@ up changes in a running session).
 
 | Extension | What it does |
 |---|---|
-| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking, a multi-column progress widget (`/todos`), role-based models (planner picker → implementer picker → read-only deep review → orchestrator restore) and a review loop that sends findings back to the implementer |
+| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking, a multi-column progress widget (`/todos`), role-based models (planner picker → implementer + reviewer + review-round pickers → auto review loop → orchestrator restore, all decided at approval time so execution and review run without further dialogs) and a review loop that sends findings back to the implementer |
 | `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
 | `inline-bash.ts` | *linked*. Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
 | `subagent/` | *linked*. Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
@@ -185,7 +185,7 @@ Local deviations from upstream:
   implementer picker keeps plan mode and runs nothing. In print/RPC mode the
   dialogs are skipped and the defaults apply. The footer appends the live
   model (`⏸ plan · GLM 5.3 Flash`, `📋 2/5 · Sonnet 5.5`,
-  `🔍 review · Kimi K3.1 Pro`).
+  `🔍 review 1/2 · Kimi K3.1 Pro`).
 
   The menus are written against the HF model router but resolve
   machine-agnostically (`resolveRoleModels`): exact `provider/id` match first
@@ -202,22 +202,37 @@ Local deviations from upstream:
   `Implementer: <id> — <reason>` line after the plan. `extractImplementerPick`
   strips fenced examples and takes the last match; the line is not numbered,
   so it never becomes a todo step.
-- **Review loop**: after the last step, a read-only reviewer checks
-  `git status`/`git diff` against the plan and ends with `Verdict: APPROVED` or
-  `Verdict: CHANGES NEEDED` plus findings. Read-only means a fixed
-  `read,bash,grep,find,ls` whitelist (custom tools are not inherited) and bash
-  limited to the plan-mode allowlist, so the reviewer cannot mutate the tree.
-  Approved shows the completion card and restores the orchestrator; changes
-  send the findings back to the implementer and re-review, capped at
-  `MAX_REVIEW_ROUNDS = 2` (the second round suggests Opus 5.5). The verdict
-  regex is end-anchored, so a qualified `Verdict: APPROVED, but ...` is treated
-  as no verdict (warning + finish), not as approval; a missing verdict never
-  loops. An aborted turn (Esc) keeps the current phase instead of completing or
-  reviewing. Executions that mutated nothing (no successful `edit`/`write`, no
-  non-read-only bash) skip review; the flag is tracked from tool results and
-  persisted. Reviewer choice: Kimi K3.1 Pro by default, GLM 5.3 Flash for
-  small/mechanical diffs, Opus 5.5 for risky plans or a second round; the
-  picker shows the suggestion first with prices.
+- **Reviewer recommendation in the prompt**: the injected prompt also lists
+  the reviewer menu and asks for an optional second unnumbered line
+  `Reviewer: <id> — <reason>; rounds: <1-5>`. `extractReviewerPick`
+  (`utils.ts`) strips fenced examples, takes the last match, and parses the
+  `rounds:` budget out of the reason; a garbage or missing `rounds:` just
+  means no suggestion.
+- **Review loop**: right after the implementer picker on approval, two more
+  dialogs decide the whole review upfront — the reviewer picker (planner's
+  `Reviewer:` pick starred, else the automatic heuristic; `⏭ Skip review`
+  still available) and a round-budget picker (1–5, planner's `rounds:` pick
+  starred, else ≤2 steps → 1, ≥6 steps or a Heavy/Opus implementer → 3,
+  otherwise 2). With both decided, the loop runs dialog-free: after the last
+  step a read-only reviewer checks `git status`/`git diff` against the plan
+  and ends with `Verdict: APPROVED` or `Verdict: CHANGES NEEDED` plus
+  findings. Read-only means a fixed `read,bash,grep,find,ls` whitelist
+  (custom tools are not inherited) and bash limited to the plan-mode
+  allowlist, so the reviewer cannot mutate the tree. Approved shows the
+  completion card and restores the orchestrator; changes send the findings
+  back to the implementer and re-review, capped at the picked
+  `reviewRoundLimit` (default 2, max 5; the footer shows `🔍 review 1/2`).
+  The verdict regex is end-anchored, so a qualified
+  `Verdict: APPROVED, but ...` is treated as no verdict (warning + finish),
+  not as approval; a missing verdict never loops. An aborted turn (Esc) keeps
+  the current phase instead of completing or reviewing. Executions that
+  mutated nothing (no successful `edit`/`write`, no non-read-only bash) skip
+  review; the flag is tracked from tool results and persisted. Reviewer
+  default: Kimi K3.1 Pro, GLM 5.3 Flash for small/mechanical diffs, Opus 5.5
+  for risky plans; the picker shows the suggestion first with prices.
+  Headless runs pick the same defaults without dialogs (skip only on the
+  explicit `; review: skip` annotation). Both dialogs re-ask on every
+  approval, so a revise → re-approve cycle can change its mind.
 - **Orchestrator restore**: the model active before the first switch is
   captured once and restored on plan completion, `/plan` off, or Shift+Tab
   leaving an empty plan. Roles and the captured models persist in the
@@ -281,9 +296,10 @@ diff -u "$UP/index.ts" pi/extensions/plan-mode/index.ts
 overlay; role-models holds the phase → model menus and thinking levels. An
 upstream `index.ts` drop-in needs the `setWidget` block, the `todos` command
 re-pointed at todos-view, and the role/review wiring (`switchToRole`,
-`maybeChoosePlannerModel`, `chooseImplementerModel`, `beginReview`,
-`handleReviewOutcome`, `restoreOrchestrator`, plus the `Implementer:` line in
-plan mode's prompt). Re-copy upstream, re-apply the deviations above (including
+`maybeChoosePlannerModel`, `chooseImplementerModel`, `chooseReviewerModel`,
+`chooseReviewRounds`, `beginReview`, `handleReviewOutcome`,
+`restoreOrchestrator`, plus the `Implementer:` and `Reviewer:` lines in plan
+mode's prompt). Re-copy upstream, re-apply the deviations above (including
 the `plan_done` tool), then syntax-check the vendored files load (note the
 `pi-tui` alias and the `./` path prefix — a bare `pi/extensions/...` path will
 not resolve):

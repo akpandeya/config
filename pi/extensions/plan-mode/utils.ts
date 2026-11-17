@@ -298,6 +298,49 @@ export function extractImplementerPick(blocks: string[]): ImplementerPick | unde
 	return undefined;
 }
 
+export interface ReviewerPick {
+	/** Model id or name the planner named for review. */
+	pick: string;
+	/** Short reason after the dash, with the rounds clause removed. */
+	reason: string;
+	/** `; rounds: n` on the line — how many review rounds the planner suggests. */
+	rounds?: number;
+}
+
+/**
+ * The planner may add one unnumbered line after the plan naming a reviewer and
+ * an optional review-round budget:
+ *
+ *   Reviewer: Kimi K3.1 Pro — deep review; rounds: 3
+ *
+ * Fenced examples are ignored (the plan itself may show the line in a code
+ * block), and the last match wins so a revised plan can change its pick.
+ */
+export function extractReviewerPick(blocks: string[]): ReviewerPick | undefined {
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		const scannable = stripFencedCode(blocks[i]);
+		const matches = [...scannable.matchAll(/^[ \t]*Reviewer:[ \t]*(.+)$/gim)];
+		const match = matches.at(-1);
+		if (!match) continue;
+
+		const raw = match[1].replace(/[`*]/g, "").trim();
+		if (!raw) continue;
+		const roundsMatch = raw.match(/\brounds?:\s*(\d+)\b/i);
+		const rounds = roundsMatch ? Number(roundsMatch[1]) : undefined;
+		const withoutRounds = raw.replace(/[;,]?\s*\brounds?:\s*\d+\b/i, "").trim();
+		// Same dash/colon split as extractImplementerPick: model names contain
+		// hyphens without spaces, so they stay intact.
+		const split =
+			withoutRounds.match(/^(.*?)\s+[—–]\s+(.*)$/) ??
+			withoutRounds.match(/^(.*?):\s+(.*)$/) ??
+			withoutRounds.match(/^(.*?)\s+-\s+(.*)$/);
+		const pick = (split?.[1] ?? withoutRounds).trim();
+		const reason = (split?.[2] ?? "").trim();
+		if (pick) return { pick, reason, rounds };
+	}
+	return undefined;
+}
+
 interface ModelChoiceCandidate {
 	model: { id: string; name: string };
 }
