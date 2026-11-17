@@ -345,8 +345,16 @@ done
 for prompt_md in "$REPO_DIR"/pi/extensions/subagent/prompts/*.md; do
     link_config "$prompt_md" "$HOME/.pi/agent/prompts/$(basename "$prompt_md")"
 done
-# dynamic-tools.ts, rtk.ts and ask-user.ts stay unlinked: they are templates
-# and optional tools, not part of the default setup (see pi/README.md).
+# The remaining vendored extensions are active by default too:
+# dynamic-tools (runtime tool registration), rtk (rewrites bash commands
+# through the rtk CLI for token savings; needs rtk >= 0.23 in PATH, which
+# brew-packages.txt installs) and ask-user (option-based question dialogs).
+link_config "$REPO_DIR/pi/extensions/dynamic-tools.ts" \
+            "$HOME/.pi/agent/extensions/dynamic-tools.ts"
+link_config "$REPO_DIR/pi/extensions/rtk.ts" \
+            "$HOME/.pi/agent/extensions/rtk.ts"
+link_config "$REPO_DIR/pi/extensions/ask-user.ts" \
+            "$HOME/.pi/agent/extensions/ask-user.ts"
 # keybindings.json moves app.thinking.cycle off Shift+Tab so plan-mode can own
 # Shift+Tab for the plan <-> execute switch (Pi reserves built-in keys).
 link_config "$REPO_DIR/pi/keybindings.json" \

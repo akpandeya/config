@@ -5,10 +5,9 @@ Config that belongs to [Pi](https://github.com/earendil-works/pi) (`pc` / `pi`).
 ## extensions/
 
 Pi auto-discovers extensions in `~/.pi/agent/extensions/`. `setup-dev-env.sh`
-symlinks the entries marked *linked* below (the repo stays the source of
-truth, so edits are live without re-running setup; Pi reads the files at
-startup; `/reload` picks up changes in a running session). Entries marked
-*unlinked* are templates or optional tools — link them yourself if needed.
+symlinks every entry below (the repo stays the source of truth, so edits are
+live without re-running setup; Pi reads the files at startup; `/reload` picks
+up changes in a running session).
 
 | Extension | What it does |
 |---|---|
@@ -16,8 +15,9 @@ startup; `/reload` picks up changes in a running session). Entries marked
 | `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
 | `inline-bash.ts` | *linked*. Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
 | `subagent/` | *linked*. Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
-| `dynamic-tools.ts` | *unlinked template*. Runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want, then link it |
-| `rtk.ts`, `ask-user.ts` | *unlinked* — kept for reference; link only if needed |
+| `dynamic-tools.ts` | *linked*. Runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
+| `rtk.ts` | *linked*. Rewrites bash commands through the `rtk` CLI for token savings; needs `rtk` >= 0.23 in PATH (`brew-packages.txt` installs it). No-ops when `rtk` is missing |
+| `ask-user.ts` | *linked*. `ask_user` tool: Claude Code-style multi-question dialog with options, multi-select and free-text "Other" |
 | `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Single override: `app.thinking.cycle` moves to `Alt+T`, freeing `Shift+Tab` for plan-mode |
 | `mcp/ddg-search/` | Local DuckDuckGo web-search MCP server (see below) |
 
