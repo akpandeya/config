@@ -16,6 +16,33 @@ and edits are live without re-running setup (Pi reads the files at startup;
 | `subagent/` | Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
 | `dynamic-tools.ts` | Template for runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
 | `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Single override: `app.thinking.cycle` moves to `Alt+T`, freeing `Shift+Tab` for plan-mode |
+| `mcp/ddg-search/` | Local DuckDuckGo web-search MCP server (see below) |
+
+### mcp/ddg-search
+
+A self-hosted MCP server replacing `duckduckgo-mcp-server` (npm), whose
+`duck-duck-scrape` dependency now triggers DuckDuckGo's anomaly detection on
+every request (the library is unmaintained). This server does a plain GET to
+`html.duckduckgo.com/html/` with browser headers, which still returns real
+results, and parses them with regex. Keyless, no API account.
+
+Registered user-level in `~/.pi/agent/mcp.json` (see `pi mcp list`):
+
+```json
+"ddgsearch": {
+  "command": "node",
+  "args": ["~/code/personal/config/pi/mcp/ddg-search/server.mjs"]
+}
+```
+
+`node_modules` is gitignored; after cloning run `npm i` inside the directory.
+One tool: `duckduckgo_web_search` (query, count 1-20, safeSearch), default
+`codemode` exposure — callable from codemode scripts. Verify with:
+
+```bash
+pi mcp list
+cd $(mktemp -d) && pi -p "use mcp__ddgsearch__duckduckgo_web_search to search for 'test' and report the top result"
+```
 
 ### plan-mode is vendored, not installed
 

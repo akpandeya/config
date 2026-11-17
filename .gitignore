@@ -140,5 +140,8 @@ dmypy.json
 
 # Neovim
 nvim/lazy-lock.json
+
+# pi MCP servers
+/pi/mcp/*/node_modules/
 /gemini/node_modules/
 /scripts/mermaid/node_modules/
