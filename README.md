@@ -56,7 +56,7 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `kitty/` | Terminal config |
 | `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only planning that asks **Approve / Keep planning / Revise** until you approve, then executes with step tracking; `Shift+Tab`). `pi/keybindings.json` moves thinking-level cycling to `Alt+T` to free `Shift+Tab` |
 | `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
-| `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
+| `shell/` | Shared shell aliases (incl. `va`: activate the nearest `.venv`, walking up) + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
 | `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `SETUP_MODE=work\|personal` (which git identity/profile to configure — inferred from existing `~/.gitconfig-work` when unset), `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1`, `SKIP_PI=1` (skip Pi CLI installation) |

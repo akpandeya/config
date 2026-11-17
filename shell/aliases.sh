@@ -3,6 +3,24 @@
 alias k=kubectl
 alias vim=nvim
 
+# va: activate the .venv of the current project, walking up the tree so it
+# works from any subdirectory. Python strategy is uv-first: projects keep a
+# .venv (uv's default layout), one-off commands skip activation entirely via
+# `uv run`. To leave the venv: `deactivate` (standard venv function).
+va() {
+    local d="$PWD"
+    while [ "$d" != "/" ]; do
+        if [ -f "$d/.venv/bin/activate" ]; then
+            source "$d/.venv/bin/activate"
+            echo "venv: $d/.venv ($(python --version 2>&1))"
+            return
+        fi
+        d="${d:h}"
+    done
+    echo "va: no .venv found above $PWD — run 'uv sync' in the project root" >&2
+    return 1
+}
+
 # Launch Claude Code against GLM 5 via the HelloFresh AI model router
 claude-glm() {
     claude --model bedrock/zai.glm-5 "$@"
