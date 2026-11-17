@@ -18,8 +18,11 @@
  * 3. Capability tiers: names that exist on no other machine ("Heavy",
  *    "GPT-6 Luna") fall back to ranking the local catalog by cost/context —
  *    the spec's `tier` says what role the model plays, not what it is called.
- * 4. Provider affinity: fuzzy/tier matches prefer the orchestrator's current
- *    provider, so the resolved model has credentials on this machine.
+ * 4. Provider affinity: every match stage prefers the orchestrator's current
+ *    provider, so the resolved model has credentials on this machine. Providers
+ *    that bill separately (pay-as-you-go, e.g. `opencode` vs the covered
+ *    `opencode-go` variant of the same model) rank last, so a bare id/name
+ *    match never silently lands on an unbilled variant.
  *
  * Edit the menus here. They are resolved against the live model registry, so a
  * model that lost its credentials is dropped from the picker instead of
@@ -162,6 +165,46 @@ function tokenMatchScore(specWords: string[], candidateWords: string[]): number 
 }
 
 /**
+ * Providers whose billing is separate from the orchestrator's subscription.
+ * When OpenCode Go covers a model, its `opencode-go/<id>` variant is included
+ * in the plan, but the same model id also exists under `opencode` — billed
+ * per-token to a credits balance that may be empty. Such providers rank last
+ * so resolution never picks them over an equivalent covered variant.
+ */
+const PAY_AS_YOU_GO_PROVIDERS = new Set(["opencode"]);
+
+/**
+ * Provider preference order: orchestrator's provider first, then anything
+ * billed normally, then pay-as-you-go providers last. Lower sorts first.
+ */
+function affinityRank(model: Model<Api>, preferred?: string): number {
+	if (preferred && model.provider === preferred) return 0;
+	if (PAY_AS_YOU_GO_PROVIDERS.has(model.provider)) return 2;
+	return 1;
+}
+
+/**
+ * First candidate matching `match`, preferring the orchestrator's provider
+ * and skipping pay-as-you-go providers unless they are the only option.
+ */
+function findWithAffinity(
+	available: readonly Model<Api>[],
+	preferred: string | undefined,
+	match: (c: Model<Api>) => boolean,
+): Model<Api> | undefined {
+	let best: { model: Model<Api>; rank: number } | undefined;
+	for (const candidate of available) {
+		if (!match(candidate)) continue;
+		const rank = affinityRank(candidate, preferred);
+		if (!best || rank < best.rank) {
+			best = { model: candidate, rank };
+			if (rank === 0) break;
+		}
+	}
+	return best?.model;
+}
+
+/**
  * Rank the local catalog for a tier. Text-capable models only (no image
  * generators); cheap/strong need a usable context window; strong also wants a
  * reasoning model, since price alone is the capability proxy here.
@@ -187,7 +230,7 @@ export function pickTierModel(
 	const avgCost = (m: Model<Api>) => (m.cost.input + m.cost.output) / 2;
 	const ctxWindow = (m: Model<Api>) => (m as { contextWindow?: number }).contextWindow ?? 0;
 	const isReasoning = (m: Model<Api>) => Boolean((m as { reasoning?: boolean }).reasoning);
-	const sameProvider = (m: Model<Api>) => (preferredProvider && m.provider === preferredProvider ? 0 : 1);
+	const sameProvider = (m: Model<Api>) => affinityRank(m, preferredProvider);
 
 	const ranked = [...pool].sort((a, b) => {
 		const byProvider = sameProvider(a) - sameProvider(b);
@@ -213,9 +256,15 @@ export function pickTierModel(
 
 /**
  * Resolve the configured menu against the live registry:
- * exact → fuzzy (vendor prefixes / tokens) → tier ranking. Fuzzy and tier
- * matches prefer the orchestrator's provider so the result has credentials.
- * Anything still unresolved is dropped.
+ * exact → fuzzy (vendor prefixes / tokens) → tier ranking. Every stage prefers
+ * the orchestrator's provider so the result has credentials, and pay-as-you-go
+ * providers rank last (see affinityRank). Anything still unresolved is dropped.
+ *
+ * The stages short-circuit on the first covered (rank ≤ 1) match. When the
+ * best match so far is pay-as-you-go (rank 2), later stages still run: an
+ * equivalent model under a covered provider (fuzzy "MoonshotAI: Kimi K3.1 Pro"
+ * ≡ "Kimi K3.1 Pro") or a tier-ranked alternative beats silently billing an
+ * empty pay-as-you-go balance.
  */
 export function resolveRoleModels(
 	ctx: ExtensionContext,
@@ -228,32 +277,65 @@ export function resolveRoleModels(
 
 	for (const spec of specs) {
 		const specWords = words(spec.id);
-		const model =
-			// 1. Exact: provider/id, then id anywhere, then display name (ci).
+		let model: Model<Api> | undefined;
+		const rank = () => (model ? affinityRank(model, preferred) : Number.POSITIVE_INFINITY);
+		const promote = (candidate: Model<Api> | undefined) => {
+			if (candidate && affinityRank(candidate, preferred) < rank()) model = candidate;
+		};
+		const accept = (candidate: Model<Api> | undefined) => {
+			if (!candidate) return;
+			const key = modelKey(candidate);
+			if (seen.has(key)) return;
+			seen.add(key);
+			resolved.push({ model: candidate, note: spec.note });
+		};
+
+		// 1. Exact: provider/id, then id anywhere, then display name (ci).
+		//    Bare matches prefer the orchestrator's provider and rank
+		//    pay-as-you-go providers last (see findWithAffinity).
+		model =
 			ctx.modelRegistry.find(spec.provider, spec.id) ??
-			available.find((c) => c.id === spec.id) ??
-			available.find((c) => c.name.toLowerCase() === spec.id.toLowerCase()) ??
-			// 2. Fuzzy: vendor prefixes ("MoonshotAI: X", "z-ai/x") and token near misses.
-			available.find((c) => namesEquivalent(spec.id, c.name) || namesEquivalent(spec.id, c.id)) ??
+			findWithAffinity(available, preferred, (c) => c.id === spec.id) ??
+			findWithAffinity(available, preferred, (c) => c.name.toLowerCase() === spec.id.toLowerCase());
+		if (rank() <= 1) {
+			accept(model);
+			continue;
+		}
+
+		// 2. Fuzzy: vendor prefixes ("MoonshotAI: X", "z-ai/x") and token near misses.
+		promote(
+			findWithAffinity(
+				available,
+				preferred,
+				(c) => namesEquivalent(spec.id, c.name) || namesEquivalent(spec.id, c.id),
+			),
+		);
+		if (rank() <= 1) {
+			accept(model);
+			continue;
+		}
+		promote(
 			available
 				.map((c) => ({
 					c,
 					score: tokenMatchScore(specWords, words(c.id)) ?? tokenMatchScore(specWords, words(c.name)),
 				}))
 				.filter((m): m is { c: Model<Api>; score: number } => m.score !== undefined)
-				.sort((a, b) =>
-					(b.score - a.score) ||
-					((a.c.provider === preferred ? 0 : 1) - (b.c.provider === preferred ? 0 : 1)),
+				.sort(
+					(a, b) =>
+						(b.score - a.score) ||
+						(affinityRank(a.c, preferred) - affinityRank(b.c, preferred)),
 				)
-				.map((m) => m.c)[0] ??
-			// 3. Tier fallback: rank the local catalog by what the role needs.
-			(spec.tier ? pickTierModel(available, spec.tier, preferred) : undefined);
-		if (!model) continue;
+				.map((m) => m.c)[0],
+		);
+		if (rank() <= 1) {
+			accept(model);
+			continue;
+		}
 
-		const key = modelKey(model);
-		if (seen.has(key)) continue;
-		seen.add(key);
-		resolved.push({ model, note: spec.note });
+		// 3. Tier fallback: rank the local catalog by what the role needs.
+		if (spec.tier) promote(pickTierModel(available, spec.tier, preferred));
+		accept(model);
 	}
 
 	return resolved;
