@@ -23,6 +23,25 @@ for substantial reviews, a local HTML explanation outside Git. The user
 copy-pastes what they want, when they want. If you catch
 yourself about to run a command that mutates the PR, stop.
 
+## In-session plan-review mode
+
+When the orchestrator supplies a plan and a working tree (automatic plan-mode
+review), this section overrides the PR-specific workflow below. Use only
+read-only file inspection plus `git status` / `git diff`; inspect untracked
+files reported by `git status`. Compare every plan step and acceptance
+criterion with the actual worktree and identify unplanned changes.
+
+Do not ask for a PR, read PR discussion, call `gh`, run the comment-link
+helper, delegate, create or open HTML, or write files. Skip PR navigation,
+stack handling, live-diff mapping, HTML artifacts, and pasteable-comment
+requirements. Report local `path:line` evidence and coverage gaps.
+
+On re-review, recheck every prior finding against the current worktree, briefly
+identify fixed findings, and return all still-open findings. Do not require a
+new commit.
+
+Use the section 8 in-session verdict and bullet contract exactly.
+
 ## 1. Pin the target
 
 Pin exact versions up front so every later command inspects the same code:
@@ -189,8 +208,12 @@ writing it up:
 - Trace a continuous flow directly. Delegate only a substantial independent
   investigation when the current harness and task permit it.
 
-Findings that don't survive this check get dropped or downgraded, not
-included for effect.
+Findings that do not survive this check must be omitted. Every finding that can
+trigger `CHANGES NEEDED` must cite inspected path:line evidence and state
+expected → actual → consequence. Clearly label verified design gaps and
+preferences; keep unresolved speculation under coverage & gaps, never in
+actionable findings. Do not describe statically inferred behavior as
+runtime-observed.
 
 ### Generate all finding links together
 
@@ -340,6 +363,8 @@ Start with **How this works**: the problem the PR solves, the main flow, and
 what changes compared with the base revision. For a stack, explain the assembled
 behavior before attributing findings to individual PRs. Use a small diagram when
 it makes the flow easier to follow; do not turn the overview into a file list.
+In-session plan-review mode: order the walkthrough by plan step and end with any
+changed behavior that cannot be traced to a plan step.
 
 For each finding:
 
@@ -370,6 +395,16 @@ mechanism. Scale the length to the point: a naming nit needs less than a race
 condition. Distinguish an implemented bug from a design gap, open question or
 preference. Never label the explanation by the reader's seniority. Do not
 present a proposed fix or intended behavior as already implemented.
+
+**In-session plan-review mode:** there is no PR and no comment link. Use the
+local worktree instead:
+
+```
+**N. <short title>** — <blocker | should-fix | nit>
+`<path>:<line>` — current worktree location
+**Evidence:** <inspected code/diff → expected behavior → actual behavior → consequence>
+**Required change:** <specific action the implementer must take>
+```
 
 The label is per finding, so a review that only surfaces naming nits or
 genuine questions doesn't force a request-changes verdict. Group
@@ -580,3 +615,22 @@ passes run, flows traced) and what you did **not** verify (e.g. no local
 build, migration not run, downstream consumer repo not checked). Never claim
 a check you didn't perform — and don't give **Approve** while material gaps
 stay unverified; use **Comment only** and name what's missing instead.
+
+**In-session plan-review mode:** the orchestrator parses an exact contract.
+Skip the Approve / Request changes / Comment only wording and end with exactly
+one plain, unformatted line:
+
+```
+Verdict: APPROVED
+```
+
+or
+
+```
+Verdict: CHANGES NEEDED
+```
+
+Immediately after that line, emit one bullet per actionable finding in the
+form ``- `path:line` — what is wrong — exact change required.`` For APPROVED,
+emit `- No actionable findings.` Put the coverage & gaps note **before** the
+verdict line; do not add prose after the bullet list.
