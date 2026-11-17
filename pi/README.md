@@ -113,6 +113,19 @@ Local deviations from upstream:
   mutating for the review-skip check. The dispatched review briefs also state
   that the reviewer's bash is allowlist-enforced (not just requested read-only);
   see the `readonly-bash.ts` bullet under subagent below.
+- **Skippable first review pass** for trivial/mechanical work: the planner may
+  append `; review: skip` to the Implementer line (e.g.
+  `Implementer: glm-5.3-flash — mechanical symlink fix; review: skip`, parsed
+  by `extractImplementerPick` in `utils.ts`), and the review dialog gains a
+  "⏭ Skip review" choice that is starred (suggested) for the first round when
+  the planner asked for it or the existing trivial heuristic fires (≤2 steps or
+  GPT-6 Luna implementer). Picking it sends a visible `plan-review-skipped`
+  card stating why and completes the plan without a reviewer. Headless runs
+  (no dialog) auto-skip only on the explicit planner annotation — never on the
+  heuristic alone. After a FINDINGS round the skip choice stays in the dialog
+  but is never starred (manual bail-out), so a changes-requested re-review
+  always runs unless you consciously skip it. A revised plan that drops the
+  marker clears the request (re-parse on every plan turn).
 - Added `Shift+Tab` to enter plan mode and, once a plan exists, to open the
   approval dialog instead of executing straight away. The agent also gets the
   dialog after every plan turn, so approve → keep planning → revise loops until

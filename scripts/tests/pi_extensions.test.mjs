@@ -353,3 +353,55 @@ test("agent files carry no machine-pinned model", () => {
 		assert.ok(!/^model:/m.test(fm), `${file} must not pin a model (breaks other machines)`);
 	}
 });
+
+/* ------------------------------------------------------------------ */
+/* plan-mode: Implementer line `; review: skip` annotation              */
+/* ------------------------------------------------------------------ */
+
+const planUtils = await jiti.import(path.join(ROOT, "pi/extensions/plan-mode/utils.ts"), { default: false });
+
+test("review: skip marker present on the Implementer line", () => {
+	const pick = planUtils.extractImplementerPick(["Implementer: glm-5.3-flash — mechanical symlink fix; review: skip"]);
+	assert.equal(pick?.pick, "glm-5.3-flash");
+	assert.equal(pick?.reason, "mechanical symlink fix; review: skip");
+	assert.equal(pick?.reviewSkip, true);
+});
+
+test("marker absent: reviewSkip is false, reason untouched", () => {
+	const pick = planUtils.extractImplementerPick(["Implementer: Claude Sonnet 5.5 — cross-cutting auth changes"]);
+	assert.equal(pick?.reviewSkip, false);
+	assert.equal(pick?.reason, "cross-cutting auth changes");
+});
+
+// `review: skipped` and compact `review:skip` both count as a skip request.
+test("review: skipped / review:skip variants are accepted", () => {
+	assert.equal(planUtils.extractImplementerPick(["Implementer: GPT-6 Luna — one-liner; review: skipped"])?.reviewSkip, true);
+	assert.equal(planUtils.extractImplementerPick(["Implementer: GPT-6 Luna — one-liner; review:skip"])?.reviewSkip, true);
+});
+
+test("review mentions that are not skip requests stay false", () => {
+	assert.equal(planUtils.extractImplementerPick(["Implementer: glm-5.3-flash — review: skip-tuning looks risky"])?.reviewSkip, false);
+	assert.equal(planUtils.extractImplementerPick(["Implementer: glm-5.3-flash — reviewed the diff earlier"])?.reviewSkip, false);
+});
+
+test("marker inside a fenced code block is ignored (show-an-example plans)", () => {
+	const blocks = [
+		"Plan:\n1. Step\n\n```\nImplementer: glm-5.3-flash — example; review: skip\n```\n\nImplementer: Claude Sonnet 5.5 — real pick",
+	];
+	const pick = planUtils.extractImplementerPick(blocks);
+	assert.equal(pick?.pick, "Claude Sonnet 5.5");
+	assert.equal(pick?.reviewSkip, false);
+});
+
+test("revision override: a revised plan that drops the marker clears it", () => {
+	const revised = planUtils.extractImplementerPick(["Implementer: glm-5.3-flash — mechanical; review: skip", "Implementer: glm-5.3-flash — scope grew, cross-cutting"]);
+	assert.equal(revised?.reviewSkip, false);
+	const kept = planUtils.extractImplementerPick(["Implementer: glm-5.3-flash — mechanical", "Implementer: glm-5.3-flash — still mechanical; review: skip"]);
+	assert.equal(kept?.reviewSkip, true);
+});
+
+test("last Implementer line wins when several carry the marker", () => {
+	const pick = planUtils.extractImplementerPick(["Implementer: a — x; review: skip", "Implementer: b — y"]);
+	assert.equal(pick?.pick, "b");
+	assert.equal(pick?.reviewSkip, false);
+});

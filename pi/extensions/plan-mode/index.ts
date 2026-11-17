@@ -147,6 +147,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	// skips the review pass.
 	let mutatedThisExecution = false;
 	let lastImplementerPick: ImplementerPick | undefined;
+	// The planner's `; review: skip` annotation on the Implementer line: the
+	// first review pass is offered as the starred dialog choice (auto-skipped
+	// headless). Cleared whenever the pick is cleared or re-parsed.
+	let plannerReviewSkip = false;
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
@@ -448,24 +452,54 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		return candidates[0];
 	}
 
-	async function chooseReviewerModel(ctx: ExtensionContext): Promise<Model<Api> | undefined> {
+	/** Return sentinel for the "⏭ Skip review" dialog choice (distinct from undefined = no candidates). */
+	type ReviewerChoice = Model<Api> | "skip" | undefined;
+
+	async function chooseReviewerModel(
+		ctx: ExtensionContext,
+		firstRound: boolean,
+		suggestSkip: boolean,
+	): Promise<ReviewerChoice> {
 		const candidates = resolveRoleModels(ctx, REVIEWER_MODELS);
 		if (candidates.length === 0) return undefined;
 
 		const suggested = automaticReviewer(candidates) ?? candidates[0];
 		if (!suggested) return undefined;
 		const ordered = [suggested, ...candidates.filter((candidate) => candidate !== suggested)];
-		if (!ctx.hasUI) return suggested.model;
+		// Headless (no dialog possible): auto-skip only on an explicit planner
+		// annotation for the first round — the trivial heuristic alone never skips
+		// silently, and post-FINDINGS rounds always review.
+		if (!ctx.hasUI) return firstRound && plannerReviewSkip ? "skip" : suggested.model;
 
-		const options = uniqueLabels(
-			ordered.map(
-				(candidate, index) =>
-					`${index === 0 ? "★ " : "  "}${describeRoleModel(candidate)}${index === 0 ? " — suggested" : ""}`,
-			),
-			ordered,
+		const modelOptions = ordered.map(
+			(candidate, index) =>
+				`${index === 0 && !suggestSkip ? "★ " : "  "}${describeRoleModel(candidate)}${
+					index === 0 && !suggestSkip ? " — suggested" : ""
+				}`,
 		);
+		const skipLabel = suggestSkip
+			? "★ ⏭ Skip review — trivial/mechanical"
+			: firstRound
+				? "  ⏭ Skip review"
+				: "  ⏭ Skip review — manual bail-out";
+		const options = [skipLabel, ...uniqueLabels(modelOptions, ordered)];
 		const choice = await ctx.ui.select("Review with which model?", options);
-		return ordered[choice === undefined ? 0 : options.indexOf(choice)]?.model ?? suggested.model;
+		if (choice === skipLabel) return "skip";
+		const model = options.indexOf(choice) > 0 ? ordered[options.indexOf(choice) - 1]?.model : undefined;
+		// Cancel (undefined) keeps today's behavior: run with the suggested model.
+		return model ?? suggested.model;
+	}
+
+	async function skipReview(ctx: ExtensionContext, why: string): Promise<void> {
+		pi.sendMessage(
+			{
+				customType: "plan-review-skipped",
+				content: `**Review skipped** — ${why}.\n\nAll plan steps completed; the reviewer pass was not run.`,
+				display: true,
+			},
+			{ deliverAs: "nextTurn" },
+		);
+		await completePlan(ctx);
 	}
 
 	async function completePlan(ctx: ExtensionContext): Promise<void> {
@@ -484,6 +518,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		mutatedThisExecution = false;
 		todoItems = [];
 		lastImplementerPick = undefined;
+		plannerReviewSkip = false;
 		plannerModel = undefined;
 		implementerIsolated = false;
 		if (toolsBeforeReview) {
@@ -496,8 +531,23 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	}
 
 	async function beginReview(ctx: ExtensionContext): Promise<void> {
+		// Skip eligibility is decided before the round counter advances: the
+		// starred offer is a first-round convenience; a re-review after FINDINGS
+		// only gets the unstarred manual bail-out.
+		const firstRound = reviewRound === 0;
+		const trivial = todoItems.length <= 2 || implementerModel?.id === "GPT-6 Luna";
+		const suggestSkip = firstRound && (plannerReviewSkip || trivial);
 		reviewRound += 1;
-		const reviewer = await chooseReviewerModel(ctx);
+		const reviewer = await chooseReviewerModel(ctx, firstRound, suggestSkip);
+		if (reviewer === "skip") {
+			const why = !firstRound
+				? "manual bail-out after a changes-requested round"
+				: plannerReviewSkip
+					? "planner-suggested (`; review: skip` on the Implementer line)"
+					: "trivial/mechanical plan";
+			await skipReview(ctx, why);
+			return;
+		}
 		if (!reviewer) {
 			await completePlan(ctx);
 			return;
@@ -667,6 +717,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		todoItems = [];
 		plannerChosen = false;
 		lastImplementerPick = undefined;
+		plannerReviewSkip = false;
 		reviewRound = 0;
 		plannerModel = undefined;
 		implementerIsolated = false;
@@ -696,6 +747,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		if (!fromExecution) {
 			plannerChosen = false;
 			lastImplementerPick = undefined;
+			plannerReviewSkip = false;
 			reviewRound = 0;
 			plannerModel = undefined;
 		} else if (plannerModel) {
@@ -945,6 +997,7 @@ ${how}`;
 				planModeEnabled = false;
 				plannerChosen = false;
 				lastImplementerPick = undefined;
+				plannerReviewSkip = false;
 				restoreNormalModeTools();
 				await restoreOrchestrator(ctx);
 				updateStatus(ctx);
@@ -1135,6 +1188,13 @@ Implementer: Isolated (<model id>) — <reason>
 then offers the per-step worker-subagent dispatch first, with the orchestrator
 keeping its own model. The user confirms the pick before anything runs.
 
+For trivial, mechanical, or debug-only changes that do not need a review, you
+may append \`; review: skip\` to the Implementer line, for example:
+Implementer: glm-5.3-flash — mechanical symlink fix; review: skip
+This marks the first review pass as skippable (the user still confirms it in
+the review dialog). It never applies after a reviewer has requested changes:
+a re-review always runs then unless the user skips it manually.
+
 Implementation models:
 ${implementerMenu}
 
@@ -1253,6 +1313,7 @@ ${how}`,
 				// Re-parse on every plan so a revision that drops the line clears
 				// the previous recommendation instead of inheriting it.
 				lastImplementerPick = extractImplementerPick(blocks);
+				plannerReviewSkip = lastImplementerPick?.reviewSkip ?? false;
 			}
 		}
 

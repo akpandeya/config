@@ -258,12 +258,19 @@ export interface ImplementerPick {
 	pick: string;
 	/** Short reason after the dash; empty when the planner omitted it. */
 	reason: string;
+	/** Planner asked to skip the first review pass (`; review: skip` on the line). */
+	reviewSkip: boolean;
 }
 
 /**
  * The planner ends its plan with one unnumbered line naming an implementer:
  *
  *   Implementer: Claude Sonnet 5.5 — cross-cutting auth changes
+ *
+ * The planner may also request skipping the first review pass by appending
+ * `; review: skip` (for trivial, mechanical, or debug-only changes):
+ *
+ *   Implementer: glm-5.3-flash — mechanical symlink fix; review: skip
  *
  * Fenced examples are ignored (the plan itself may show the line in a code
  * block), and the last match wins so a revised plan can change its pick.
@@ -284,7 +291,9 @@ export function extractImplementerPick(blocks: string[]): ImplementerPick | unde
 			raw.match(/^(.*?)\s+[—–]\s+(.*)$/) ?? raw.match(/^(.*?):\s+(.*)$/) ?? raw.match(/^(.*?)\s+-\s+(.*)$/);
 		const pick = (split?.[1] ?? raw).trim();
 		const reason = (split?.[2] ?? "").trim();
-		if (pick) return { pick, reason };
+		if (pick) return { pick, reason, // Not followed by a word char or hyphen, so "review: skip-tuning" is not a
+// skip request.
+reviewSkip: /\breview:\s*skip(?:ped)?\b(?![\w-])/i.test(raw) };
 	}
 	return undefined;
 }
