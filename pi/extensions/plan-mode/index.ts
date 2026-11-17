@@ -23,7 +23,13 @@ import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Key } from "@earendil-works/pi-tui";
-import { allStepsComplete, extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.ts";
+import {
+	allStepsComplete,
+	extractTodoItemsFromBlocks,
+	isSafeCommand,
+	markCompletedSteps,
+	type TodoItem,
+} from "./utils.ts";
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
@@ -37,6 +43,7 @@ interface PlanModeState {
 	enabled: boolean;
 	todos?: TodoItem[];
 	executing?: boolean;
+	awaitingAnswers?: boolean;
 	toolsBeforePlanMode?: string[];
 }
 
@@ -58,9 +65,21 @@ function getTextContent(message: AssistantMessage): string {
 		.join("\n");
 }
 
+// Per-content-block view of an assistant message, for plan extraction: thinking
+// and text are kept separate so a draft plan in thinking can't merge with the
+// final plan in the text block (see extractTodoItemsFromBlocks).
+function getContentBlocks(message: AssistantMessage): string[] {
+	return message.content.map((block) => {
+		if (block.type === "text") return block.text;
+		if (block.type === "thinking") return (block as { thinking?: string }).thinking ?? "";
+		return "";
+	});
+}
+
 export default function planModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
 	let executionMode = false;
+	let awaitingAnswers = false;
 	let todoItems: TodoItem[] = [];
 	let toolsBeforePlanMode: string[] | undefined;
 
@@ -76,7 +95,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			const completed = todoItems.filter((t) => t.completed).length;
 			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `📋 ${completed}/${todoItems.length}`));
 		} else if (planModeEnabled) {
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
+			ctx.ui.setStatus(
+				"plan-mode",
+				ctx.ui.theme.fg(awaitingAnswers ? "accent" : "warning", awaitingAnswers ? "⏳ awaiting answers" : "⏸ plan"),
+			);
 		} else {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
@@ -131,6 +153,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			enabled: planModeEnabled,
 			todos: todoItems,
 			executing: executionMode,
+			awaitingAnswers,
 			toolsBeforePlanMode,
 		});
 	}
@@ -138,6 +161,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	function togglePlanMode(ctx: ExtensionContext): void {
 		planModeEnabled = !planModeEnabled;
 		executionMode = false;
+		awaitingAnswers = false;
 		todoItems = [];
 
 		if (planModeEnabled) {
@@ -154,6 +178,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	function enterPlanMode(ctx: ExtensionContext): void {
 		planModeEnabled = true;
 		executionMode = false;
+		awaitingAnswers = false;
 		enablePlanModeTools();
 		updateStatus(ctx);
 		persistState();
@@ -166,6 +191,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	function beginExecution(ctx: ExtensionContext): void {
 		planModeEnabled = false;
 		executionMode = true;
+		awaitingAnswers = false;
 		restoreNormalModeTools();
 		updateStatus(ctx);
 		persistState();
@@ -215,7 +241,6 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	const APPROVE = "Approve — implement now";
-	const KEEP_PLANNING = "Keep planning";
 	const REVISE = "Revise plan…";
 
 	/**
@@ -232,11 +257,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			display: true,
 		};
 
-		const choice = await ctx.ui.select(`Approve this plan? (${todoItems.length} steps)`, [
-			APPROVE,
-			KEEP_PLANNING,
-			REVISE,
-		]);
+		const choice = await ctx.ui.select(`Approve this plan? (${todoItems.length} steps)`, [APPROVE, REVISE]);
 
 		if (choice === APPROVE) {
 			const firstTodoItem = todoItems[0];
@@ -261,6 +282,7 @@ After completing each step, call the plan_done tool with that step's number imme
 		}
 
 		if (choice === REVISE) {
+			awaitingAnswers = false;
 			const refinement = await ctx.ui.editor("What should change in the plan?", "");
 			if (refinement?.trim()) {
 				// Local deviation from upstream: guardrails so the revise turn edits
@@ -272,8 +294,9 @@ After completing each step, call the plan_done tool with that step's number imme
 			return;
 		}
 
-		// KEEP_PLANNING, or the dialog was dismissed: stay in plan mode. The next
-		// plan the agent presents asks again.
+		// KEEP_PLANNING was removed: it was a no-op fallthrough identical to
+		// dismissing the dialog. Dismissal (Esc/undefined) keeps plan mode; the
+		// next plan the agent presents asks again.
 	}
 
 	pi.registerCommand("plan", {
@@ -383,6 +406,18 @@ After completing each step, call the plan_done tool with that step's number imme
 		if (event.messageType !== "user") return;
 
 		if (planModeEnabled) {
+			const awaitingNote = awaitingAnswers
+				? `\nYour clarifying questions have been answered. Now present the full plan
+under a "Plan:" header. Ask follow-up questions only if something is still
+genuinely blocking a sensible plan — otherwise do not ask again.`
+				: "";
+			if (awaitingAnswers) {
+				// The user's reply to our clarifying questions just arrived; the note
+				// above tells the agent to plan now. Clear so later turns don't keep
+				// repeating it.
+				awaitingAnswers = false;
+				persistState();
+			}
 			return {
 				message: {
 					customType: "plan-mode-context",
@@ -392,20 +427,35 @@ You are in plan mode - a read-only exploration mode for safe code analysis.
 Restrictions:
 - Built-in edit and write tools are disabled
 - Other currently active tools remain available
-- Bash is restricted to an allowlist of read-only commands
+- Bash is restricted to an allowlist of read-only commands${awaitingNote}
 
-Ask clarifying questions when the request is ambiguous.
+Work in two phases — NEVER both in the same response:
 
-When the user asks for plan changes, revise the plan text only — do not
-execute it and do not re-explore the codebase unless the change requires
-verification.
+Phase 1 — Clarify (only if the request is ambiguous or missing key details):
+Call the questionnaire tool with option-based questions (each option needs a
+value, a label, and an optional description). Begin the response with the
+header "Clarifying questions:" followed by a one-line summary of what you are
+asking and why. Do NOT present a plan before the questions are answered. If
+you asked plain-text questions instead of using the tool, end your turn and
+wait for the user's reply. If the request is already clear enough to plan,
+skip this phase.
 
-Create a detailed numbered plan under a "Plan:" header:
+Phase 2 — Plan (when requirements are clear, or answers have arrived):
+When the questionnaire tool returns the user's answers as its result,
+continue straight into this phase in the same turn — no extra round-trip is
+needed. Explore the codebase read-only as needed, then output the full plan:
 
 Plan:
 1. First step description
 2. Second step description
 ...
+
+When you present a "Plan:" section, do NOT also ask clarifying questions in
+that response — ask them in a separate earlier turn instead.
+
+When the user asks for plan changes, revise the plan text only — do not
+execute it and do not re-explore the codebase unless the change requires
+verification.
 
 Do NOT attempt to make changes - just describe what you would do. Then stop and
 wait: the user approves, keeps planning, or asks for a revision, and every
@@ -464,6 +514,7 @@ After completing each step, call the plan_done tool with that step's number imme
 					{ deliverAs: "nextTurn" },
 				);
 				executionMode = false;
+				awaitingAnswers = false;
 				todoItems = [];
 				updateStatus(ctx);
 				persistState(); // Save cleared state so resume doesn't restore old execution mode
@@ -475,12 +526,39 @@ After completing each step, call the plan_done tool with that step's number imme
 
 		// Extract todos from last assistant message
 		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
+		let extracted: TodoItem[] = [];
 		if (lastAssistant) {
-			const extracted = extractTodoItems(getTextContent(lastAssistant));
+			extracted = extractTodoItemsFromBlocks(getContentBlocks(lastAssistant));
 			if (extracted.length > 0) {
 				todoItems = extracted;
 			}
 		}
+
+		// Clarify-first gate: when this turn asked the user questions WITHOUT
+		// producing a plan (plain-text questions, or a questionnaire call the model
+		// didn't plan from), wait for the answers instead of showing the approval
+		// dialog. When the questionnaire's in-turn answers already led to a plan,
+		// fall through to the normal approval flow — extracting first is what makes
+		// that distinction (a run-scoped check alone would suppress the dialog
+		// every time the tool was used).
+		const askedQuestions =
+			event.messages.some(
+				(m) =>
+					(m as { role?: string; toolName?: string }).role === "toolResult" &&
+					(m as { toolName?: string }).toolName === "questionnaire",
+			) ||
+			(lastAssistant !== undefined &&
+				/^#{0,6}\s*\*{0,2}Clarifying questions:?/im.test(getTextContent(lastAssistant)));
+		if (askedQuestions && extracted.length === 0) {
+			awaitingAnswers = true;
+			updateStatus(ctx);
+			persistState();
+			return;
+		}
+		awaitingAnswers = false;
+		// Refresh the footer here: without this, clearing awaitingAnswers leaves a
+		// stale "⏳ awaiting answers" visible even though the approval dialog fires.
+		updateStatus(ctx);
 
 		if (todoItems.length === 0) return;
 		persistState();
@@ -507,6 +585,7 @@ After completing each step, call the plan_done tool with that step's number imme
 			planModeEnabled = planModeEntry.data.enabled ?? planModeEnabled;
 			todoItems = planModeEntry.data.todos ?? todoItems;
 			executionMode = planModeEntry.data.executing ?? executionMode;
+			awaitingAnswers = planModeEntry.data.awaitingAnswers ?? awaitingAnswers;
 			toolsBeforePlanMode = planModeEntry.data.toolsBeforePlanMode ?? toolsBeforePlanMode;
 		}
 

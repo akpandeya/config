@@ -327,6 +327,10 @@ link_config "$REPO_DIR/pi/extensions/plan-mode" \
             "$HOME/.pi/agent/extensions/plan-mode"
 link_config "$REPO_DIR/pi/extensions/background-compaction.ts" \
             "$HOME/.pi/agent/extensions/background-compaction.ts"
+# questionnaire is vendored from the pi examples too: plan-mode's clarify-first
+# flow calls it, and it is not a built-in tool.
+link_config "$REPO_DIR/pi/extensions/questionnaire.ts" \
+            "$HOME/.pi/agent/extensions/questionnaire.ts"
 # keybindings.json moves app.thinking.cycle off Shift+Tab so plan-mode can own
 # Shift+Tab for the plan <-> execute switch (Pi reserves built-in keys).
 link_config "$REPO_DIR/pi/keybindings.json" \

@@ -133,7 +133,12 @@ export function extractTodoItems(message: string): TodoItem[] {
 	// Take the LAST "Plan:" section: since getTextContent includes thinking blocks,
 	// a draft in the reasoning block can precede the user-visible plan in the text
 	// block — the text block comes last in content order.
-	const headers = [...message.matchAll(/\*{0,2}Plan:\*{0,2}\s*\n/gi)];
+	// Header must sit on a line of its own (start-of-line, optional "#"/bold
+	// markers, nothing else on the line). The old mid-sentence pattern
+	// (\*{0,2}Plan:\*{0,2}\s*\n) also matched prose like "…present the plan:**",
+	// which scraped unrelated numbered lists (e.g. clarifying questions) as
+	// plan steps and fired the approval dialog on non-plans.
+	const headers = [...message.matchAll(/^\s*(?:#{1,6}\s+)?\*{0,2}Plan:?\*{0,2}\s*$/gim)];
 	if (headers.length === 0) return items;
 	const lastHeader = headers[headers.length - 1];
 	const planSection = message.slice((lastHeader.index ?? 0) + lastHeader[0].length);
@@ -154,6 +159,27 @@ export function extractTodoItems(message: string): TodoItem[] {
 		}
 	}
 	return items;
+}
+
+/**
+ * Block-aware plan extraction. `blocks` are the assistant message's content
+ * blocks in order (thinking first, visible text last). Only the LAST block
+ * containing a "Plan:" header is scanned, and only within that block.
+ *
+ * Why not just join the blocks and take the last header: when the visible text
+ * had no header (e.g. it said "Revised plan:" mid-sentence) but a thinking
+ * draft did, the slice leaked past the header's block into every later block,
+ * merging the thinking draft's steps with the final plan's steps into one
+ * phantom list (observed live: a 10-step dialog built from 5 + 5).
+ */
+export function extractTodoItemsFromBlocks(blocks: string[]): TodoItem[] {
+	const headerRe = /^\s*(?:#{1,6}\s+)?\*{0,2}Plan:?\*{0,2}\s*$/im;
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		if (headerRe.test(blocks[i])) {
+			return extractTodoItems(blocks[i]);
+		}
+	}
+	return [];
 }
 
 export function extractDoneSteps(message: string): number[] {

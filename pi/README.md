@@ -11,7 +11,8 @@ and edits are live without re-running setup (Pi reads the files at startup;
 
 | Extension | What it does |
 |---|---|
-| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`) that presents the plan and asks **Approve / Keep planning / Revise** until you approve, then executes with `[DONE:n]` step tracking and a progress widget |
+| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking and a progress widget |
+| `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
 | `inline-bash.ts` | Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
 | `subagent/` | Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
 | `dynamic-tools.ts` | Template for runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
@@ -57,9 +58,25 @@ Upstream path: `$(npm root -g)/@earendil-works/pi-coding-agent/examples/extensio
 Local deviations from upstream:
 
 - Prompt (`[PLAN MODE ACTIVE]` in `index.ts`): dropped the `brave-search` skill
-  line (that skill isn't installed everywhere), and the clarifying-questions
-  hint no longer names the `questionnaire` tool, which ships as a separate
-  example extension and is usually not active.
+  line (that skill isn't installed everywhere), and defines a two-phase flow:
+  if the request is ambiguous, call the `questionnaire` tool with option-based
+  questions, marked with a `Clarifying questions:` header. No plan before the
+  questions are answered; when the questionnaire returns answers (its tool
+  result, same turn), continue straight to the `Plan:`. Plain-text questions
+  end the turn and wait for the user's reply.
+- Structural clarify gate: an `awaitingAnswers` flag (persisted in session
+  state, restored on resume). In `agent_end`, a turn that asked questions
+  (questionnaire tool call or `Clarifying questions:` header) AND produced no
+  plan sets the flag, skips the approval dialog, and shows `⏳ awaiting
+  answers` in the footer; the next user prompt injects "answers received —
+  present the full plan" and clears the flag. A questionnaire call whose
+  answers led to a plan in the same run falls through to the normal approval
+  flow (extraction runs before the gate), and the footer is refreshed via
+  `updateStatus` whenever the flag clears, so `⏳` never goes stale.
+- Approval dialog has two options (`Approve — implement now` / `Revise
+  plan…`); upstream's third option `Keep planning` was a no-op fallthrough
+  identical to dismissing the dialog, so it was removed — Esc means keep
+  planning.
 - Added `Shift+Tab` to enter plan mode and, once a plan exists, to open the
   approval dialog instead of executing straight away. The agent also gets the
   dialog after every plan turn, so approve → keep planning → revise loops until
@@ -73,6 +90,17 @@ Local deviations from upstream:
   (`[DONE:n]` tags in text are still scanned as a fallback). The tool is
   excluded from plan mode via `PLAN_MODE_DISABLED_TOOLS` so steps can't be
   ticked early; both execute prompts instruct the agent to call it.
+- `Plan:` extraction (`utils.ts`) anchors the header to the start of a line
+  (optional `#`/bold markers, nothing else on the line). Upstream's
+  mid-sentence pattern also matched prose like "…present the plan:**", which
+  scraped unrelated numbered lists as plan steps and fired the approval dialog
+  on non-plans.
+- Plan extraction is block-scoped (`extractTodoItemsFromBlocks` in
+  `utils.ts`): only the last content block (thinking, then text) containing a
+  `Plan:` header is scanned, within that block only. Upstream joins thinking
+  and text with `\n` before slicing from the last header, so a thinking draft
+  could merge with — or, when the visible text had no header, leak past — the
+  final plan (observed live: a 10-step dialog built from 5 + 5 steps).
 - `pi/keybindings.json` moves `app.thinking.cycle` to `Alt+T`. Pi reserves
   `Shift+Tab` for that action and would otherwise skip the extension shortcut
   with a conflict warning.
@@ -142,15 +170,21 @@ pi --plan          # start in plan mode
 | Current mode | Shift+Tab does |
 |---|---|
 | Normal | Enters plan mode (read-only) |
-| Plan, plan present | Opens the approval dialog: **Approve — implement now** / **Keep planning** / **Revise plan…** |
+| Plan, plan present | Opens the approval dialog: **Approve — implement now** / **Revise plan…** (Esc = keep planning) |
 | Plan, no plan yet | Leaves plan mode (nothing to approve) |
 | Execute | Back to plan mode, keeping the extracted steps |
 
 The same dialog appears automatically after every plan-mode turn that contains
-a `Plan:` section, so the loop is plan → ask → (keep planning or revise) →
-re-plan → ask → approve. *Keep planning* leaves you in plan mode to type
-feedback; *Revise plan…* opens an editor and sends your revision as a follow-up,
-which produces a new plan and a new prompt. Nothing runs until you approve.
+a `Plan:` section, so the loop is plan → ask → (keep planning via Esc, or
+revise) → re-plan → ask → approve. *Revise plan…* opens an editor and sends
+your revision as a follow-up, which produces a new plan and a new prompt.
+Nothing runs until you approve.
+
+Clarify-first: when the request is ambiguous, plan mode's prompt tells the
+agent to ask option-based questions via the `questionnaire` tool and stop;
+the extension then holds the approval dialog and shows `⏳ awaiting answers`
+until you reply. Your reply is injected as "answers received — present the
+full plan", and only then does the approval cycle start.
 
 Plan mode removes `edit`/`write`, keeps your other active tools, and blocks
 non-allowlisted bash (allowlist lives in `utils.ts`). Execute mode has no
