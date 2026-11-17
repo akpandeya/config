@@ -18,17 +18,25 @@ echo
 
 # --- Profile Selection ---
 if [ -z "$SETUP_MODE" ]; then
+    # Infer the profile from what is already configured on this machine, so a
+    # re-run never silently deletes ~/.gitconfig-work or unsets the work
+    # includeIf just because SETUP_MODE was not passed again.
+    detected_mode="personal"
+    if [ -f "$HOME/.gitconfig-work" ] || \
+       git config --global --get 'includeIf.gitdir:~/code/work/.path' >/dev/null 2>&1; then
+        detected_mode="work"
+    fi
+    SETUP_MODE="$detected_mode"
     if [ -t 0 ]; then
         echo "Select setup profile:"
         echo "  1) Work (sets up both work and personal configs & credentials)"
         echo "  2) Personal (sets up only personal configs & credentials)"
-        read -p "Choose option [1 or 2, default: 2]: " mode_opt
+        echo "  Detected on this machine: $detected_mode"
+        read -p "Choose option [1 or 2, default: $detected_mode]: " mode_opt
         case "$mode_opt" in
             1) SETUP_MODE="work" ;;
-            *) SETUP_MODE="personal" ;;
+            2) SETUP_MODE="personal" ;;
         esac
-    else
-        SETUP_MODE="personal"
     fi
 fi
 export SETUP_MODE
@@ -241,7 +249,7 @@ else
 fi
 
 echo
-echo "=== Setting up git configuration ==="
+echo "=== Installing Pi CLI ==="
 echo
 
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -249,14 +257,10 @@ REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Homebrew packages (including node) are installed before the Pi CLI.
 DRY_RUN="$DRY_RUN" bash "$REPO_DIR/scripts/install-pi.sh"
 
-if [ "$DRY_RUN" = "1" ]; then
-    echo "Would run: $REPO_DIR/git/setup.sh (dry-run mode not supported by that script — skipped)"
-else
-    cd "$REPO_DIR/git"
-    chmod +x setup.sh
-    ./setup.sh
-    cd "$REPO_DIR"
-fi
+# Git identity is owned further down by the gitconfig/ render + setup_git_global
+# path, which reads gitconfig/emails.local.env and never prompts. Do not add an
+# interactive git-identity step here: an earlier one asked for name/emails on
+# every run and then had its output overwritten a few steps later.
 
 echo
 echo "=== Setting up SSH keys from 1Password ==="
@@ -488,6 +492,10 @@ if command -v claude >/dev/null 2>&1; then
 fi
 
 
+echo
+echo "=== Setting up git identity + signing ==="
+echo
+
 # Per-scope git identity + SSH signing keys. Render the repo's scoped
 # templates into ~/.gitconfig-{personal,work}; they're pulled in by the
 # includeIf blocks set below on the top-level ~/.gitconfig. Real emails
@@ -497,6 +505,32 @@ if [ -f "$EMAILS_ENV" ]; then
     # shellcheck disable=SC1090
     . "$EMAILS_ENV"
 fi
+
+# Re-running on an already-configured machine must never re-prompt for
+# identity. Only when emails.local.env is absent do we fall back to the
+# identity currently in effect, and only prompt if that is empty too.
+# The placeholder check guards against a previously failed render leaving
+# __PERSONAL_EMAIL__/__WORK_EMAIL__ literals in the scoped files.
+_is_placeholder() { case "$1" in __PERSONAL_EMAIL__|__WORK_EMAIL__|"") return 0 ;; *) return 1 ;; esac; }
+if [ -z "$PERSONAL_EMAIL" ] || _is_placeholder "$PERSONAL_EMAIL"; then
+    PERSONAL_EMAIL=""
+    if [ -f "$HOME/.gitconfig-personal" ]; then
+        PERSONAL_EMAIL=$(git config --file "$HOME/.gitconfig-personal" user.email 2>/dev/null || true)
+    fi
+    if _is_placeholder "$PERSONAL_EMAIL"; then
+        PERSONAL_EMAIL=$(git config --global user.email 2>/dev/null || true)
+    fi
+fi
+if [ "$SETUP_MODE" = "work" ] && { [ -z "$WORK_EMAIL" ] || _is_placeholder "$WORK_EMAIL"; }; then
+    WORK_EMAIL=""
+    if [ -f "$HOME/.gitconfig-work" ]; then
+        WORK_EMAIL=$(git config --file "$HOME/.gitconfig-work" user.email 2>/dev/null || true)
+    fi
+    if _is_placeholder "$WORK_EMAIL"; then
+        WORK_EMAIL=""
+    fi
+fi
+
 if [ -z "$PERSONAL_EMAIL" ]; then
     if [ -t 0 ]; then
         read -p "Personal email: " -r PERSONAL_EMAIL

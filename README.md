@@ -47,21 +47,19 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 
 | Directory | What it holds |
 |---|---|
-| `bash/` | Bash profile snippets |
 | `brew-packages.txt` | Everything Homebrew installs |
 | `agents/communication.md` | Shared plain-language and local-explanation preferences |
 | `claude/skills/` | Personal skills, linked into Claude and the Gemini personal-skills plugin. Company-specific skills live in the private work-context repo. Jarvis-managed skill directories retain their own installation |
 | `claude/hooks/` | Claude Code hook scripts. None are wired up right now (`settings-hooks.json` has an empty `PostToolUse`), so `jarvis-register.sh` is not active |
 | `claude/settings-hooks.json` | Merged into `~/.claude/settings.json` — only replaces `hooks.PostToolUse`, preserves everything else |
-| `git/` | gitconfig templates (one personal, one work, one default with conditional includes) |
-| `gitconfig/` | Scoped git identity templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap. Real emails live in `emails.local.env` (gitignored — never commit them) |
+| `gitconfig/` | Scoped git identity + signing templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap (see `gitconfig/README.md`). Real emails live in `emails.local.env` (gitignored — never commit them) |
 | `kitty/` | Terminal config |
 | `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only planning that asks **Approve / Keep planning / Revise** until you approve, then executes with step tracking; `Shift+Tab`). `pi/keybindings.json` moves thinking-level cycling to `Alt+T` to free `Shift+Tab` |
 | `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
 | `shell/` | Shared shell aliases + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
-| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1`, `SKIP_PI=1` (skip Pi CLI installation) |
+| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `SETUP_MODE=work\|personal` (which git identity/profile to configure — inferred from existing `~/.gitconfig-work` when unset), `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1`, `SKIP_PI=1` (skip Pi CLI installation) |
 
 ## Jumping into a repo with an AI harness (`dev`)
 
@@ -397,6 +395,12 @@ is supplied.
 ```bash
 # See what a full bootstrap run would do without changing anything
 DRY_RUN=1 ./setup-dev-env.sh
+
+# Pick the git identity/profile explicitly. Left unset, it is inferred from
+# this machine (work if ~/.gitconfig-work exists), so re-runs never drop the
+# work identity just because the variable was not passed again. Git identity
+# emails come from gitconfig/emails.local.env and are never prompted for.
+SETUP_MODE=work ./setup-dev-env.sh
 
 # Re-run just the SSH setup (after adding a new key to 1Password)
 ./ssh/setup.sh
