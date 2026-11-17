@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one headless agent turn on a chosen harness and model.
 #
-# Usage: run-harness.sh <claude|opencode|agy> <model> <implement|decompose|review> <cwd> <prompt-file> <log-file>
+# Usage: run-harness.sh <claude|opencode|agy|pi> <model> <implement|decompose|review> <cwd> <prompt-file> <log-file>
 #
 # - implement: writes code in <cwd>; must not commit, push or open PRs (the driver owns those).
 #              implement-preamble.md (next to this script) is prepended to the prompt; the original
@@ -41,7 +41,7 @@ timeout_seconds() {
 if [ "${RUN_HARNESS_SOURCE_ONLY:-}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
 
 if [ $# -ne 6 ]; then
-  echo "usage: run-harness.sh <claude|opencode|agy> <model> <implement|decompose|review> <cwd> <prompt-file> <log-file>" >&2
+  echo "usage: run-harness.sh <claude|opencode|agy|pi> <model> <implement|decompose|review> <cwd> <prompt-file> <log-file>" >&2
   exit 2
 fi
 
@@ -53,8 +53,8 @@ PROMPT_FILE=$5
 LOG_FILE=$6
 
 case "$HARNESS" in
-  claude | opencode | agy) ;;
-  *) echo "run-harness: unknown harness '$HARNESS' (want claude, opencode or agy)" >&2; exit 2 ;;
+  claude | opencode | agy | pi) ;;
+  *) echo "run-harness: unknown harness '$HARNESS' (want claude, opencode, agy or pi)" >&2; exit 2 ;;
 esac
 
 case "$ROLE" in
@@ -100,6 +100,8 @@ case "$HARNESS:$ROLE" in
   # Headless agy denies shell under accept-edits and plan modes, so verify commands would be
   # refused. Every agy role therefore uses the full flag, as agy-drive always did.
   agy:*) PERMISSION=(--dangerously-skip-permissions) ;;
+  # pi headless (-p) auto-runs tools; no approval flags exist or are needed.
+  pi:*) PERMISSION=() ;;
 esac
 
 # claude -p takes --add-dir with multiple paths, so the prompt argument must come before it.
@@ -122,6 +124,10 @@ case "$HARNESS" in
     ;;
   agy)
     ( cd "$CWD" && agy -p "$PROMPT" --model "$MODEL" --print-timeout "${TIMEOUT_SECONDS}s" "${PERMISSION[@]}" </dev/null ) > "$LOG_FILE" 2>&1
+    ;;
+  pi)
+    ( cd "$CWD" && perl -e 'alarm shift; exec @ARGV' "$TIMEOUT_SECONDS" \
+        pi -p --no-session --model "$MODEL" ${PERMISSION[@]+"${PERMISSION[@]}"} "$PROMPT" </dev/null ) > "$LOG_FILE" 2>&1
     ;;
 esac
 RC=$?

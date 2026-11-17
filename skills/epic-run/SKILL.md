@@ -29,11 +29,13 @@ time. If the script is missing, say so and stop: the install step has not run.
 
 ## 2. Pick harnesses
 
-Ask the three role questions and the cool-down question in one `AskUserQuestion` call (four questions).
-If the tool allows fewer than four questions per call, ask the cool-down question in a separate call.
+Ask the three role questions and the cool-down question in one dialog call — the `ask_user` tool
+in pi, `AskUserQuestion` in Claude Code (four questions; if the tool allows fewer than four per
+call, ask the cool-down question in a separate call).
 
-For the three role questions, the options are the three harnesses, each with a short description:
+For the three role questions, the options are the four harnesses, each with a short description:
 
+- **pi**: models from the pi catalog (`pi:<provider>/<model>`), including the model router
 - **Claude Code**: Claude models through `claude`
 - **OpenCode**: models from the local `opencode` config
 - **Antigravity (agy)**: Gemini and Claude models through `agy`
@@ -58,7 +60,7 @@ default silently.
 ## 3. Pick models
 
 For each role, list the models for its chosen harness from step 1. Ask all three model questions in
-one second `AskUserQuestion` call. Offer at most four options per question, plus the built-in "Other"
+one second dialog call (`ask_user` / `AskUserQuestion`). Offer at most four options per question, plus the built-in "Other"
 for the rest. Put the most capable model first and mark it "(Recommended)" only for the decomposer and
 reviewer when the harness offers an Opus-class model.
 

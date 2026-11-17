@@ -37,6 +37,7 @@ import {
 	ROLE_THINKING,
 	describeRoleModel,
 	formatModelCost,
+	modelKey,
 	resolveRoleModels,
 	type PhaseRole,
 	type ThinkingLevel,
@@ -62,6 +63,10 @@ const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write", "plan_done"])
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 // Review is read-only. Do not inherit custom tools: they may mutate state.
 const REVIEW_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
+// Agents the parent may dispatch while a read-only guarantee is active. The
+// `worker` agent mutates files, so it is excluded: dispatching it from plan or
+// review mode would bypass the tool restrictions through the subagent.
+const READONLY_AGENTS = new Set(["scout", "reviewer", "reviewer-strong"]);
 
 interface SavedModel {
 	provider: string;
@@ -79,6 +84,7 @@ interface PlanModeState {
 	planner?: SavedModel;
 	orchestrator?: SavedModel;
 	implementer?: SavedModel;
+	implementerIsolated?: boolean;
 	reviewer?: SavedModel;
 	reviewing?: boolean;
 	reviewRound?: number;
@@ -130,6 +136,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let plannerModel: SavedModel | undefined;
 	let orchestrator: SavedModel | undefined;
 	let implementerModel: SavedModel | undefined;
+	// When true, execution is delegated to per-step `worker` subagents instead of
+	// running inline in this session.
+	let implementerIsolated = false;
 	let reviewerModel: SavedModel | undefined;
 	let reviewing = false;
 	let reviewRound = 0;
@@ -193,6 +202,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	function uniqueToolNames(toolNames: string[]): string[] {
 		return [...new Set(toolNames)];
+	}
+
+	/** True when the subagent extension is loaded and its tool is active. */
+	function subagentToolActive(): boolean {
+		return pi.getActiveTools().includes("subagent");
 	}
 
 	function getPlanModeTools(activeToolNames: string[]): string[] {
@@ -269,8 +283,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		return true;
 	}
 
-	/** Back to the model that was active before plan mode started. */
-	async function restoreOrchestrator(ctx: ExtensionContext): Promise<void> {
+	/** Back to the model that was active before plan mode started. With
+	 *  keepSaved the model is restored but the snapshot is retained — used on the
+	 *  isolated-execution path, where a later revise → re-approve cycle still
+	 *  needs the orchestrator snapshot for completion. */
+	async function restoreOrchestrator(ctx: ExtensionContext, keepSaved = false): Promise<void> {
 		const saved = orchestrator;
 		if (!saved) return;
 		const model = ctx.modelRegistry.find(saved.provider, saved.id);
@@ -288,7 +305,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		}
 		pi.setThinkingLevel(saved.thinkingLevel);
 		// Only forget the saved model once it is actually active again.
-		orchestrator = undefined;
+		if (!keepSaved) orchestrator = undefined;
 		updateStatus(ctx);
 	}
 
@@ -346,21 +363,39 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	/**
 	 * Approval-time pick: the planner's recommendation first (★), otherwise the
-	 * workhorse. Dismissing keeps plan mode and runs nothing.
+	 * workhorse. The planner can recommend isolation for risky or long plans by
+	 * writing `Implementer: Isolated (<model id>) — <reason>`, which stars the
+	 * isolated option; a plain model recommendation stars the inline path.
+	 *
+	 * "Isolated — worker subagent" delegates execution to per-step `worker`
+	 * subagents. In that mode the session model is NOT switched to the
+	 * implementer: the orchestrator keeps its own model (dispatch and failure
+	 * recovery are cheap; the worker's model must not constrain them) and each
+	 * dispatch carries an explicit `model` override instead.
+	 * Dismissing keeps plan mode and runs nothing.
 	 */
-	async function chooseImplementerModel(ctx: ExtensionContext): Promise<Model<Api> | undefined> {
+	async function chooseImplementerModel(
+		ctx: ExtensionContext,
+	): Promise<{ model: Model<Api>; isolated: boolean } | undefined> {
 		const candidates = resolveRoleModels(ctx, IMPLEMENTER_MODELS);
-		if (candidates.length === 0) return ctx.model ?? undefined;
+		if (candidates.length === 0) {
+			return ctx.model ? { model: ctx.model, isolated: false } : undefined;
+		}
 
-		const recommended = lastImplementerPick
-			? matchModelChoice(lastImplementerPick.pick, candidates)
-			: undefined;
+		const pickText = (lastImplementerPick?.pick ?? "").replace(/[`*]/g, "").trim();
+		const recommendsIsolated = /^isolated/i.test(pickText);
+		const innerPick = recommendsIsolated ? pickText.replace(/^isolated/i, "").replace(/[()]/g, " ").trim() : pickText;
+		const recommended = innerPick ? matchModelChoice(innerPick, candidates) : undefined;
 		const ordered = recommended
 			? [recommended, ...candidates.filter((candidate) => candidate !== recommended)]
-			: candidates;
-		if (!ctx.hasUI) return ordered[0]?.model;
+			: [...candidates];
+		if (!ctx.hasUI) {
+			const first = ordered[0]?.model;
+			return first ? { model: first, isolated: false } : undefined;
+		}
 
-		const options = uniqueLabels(
+		const canDispatch = subagentToolActive();
+		const modelLabels = uniqueLabels(
 			ordered.map((candidate) => {
 				const star = candidate === recommended;
 				const reason =
@@ -369,9 +404,25 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			}),
 			ordered,
 		);
+		const ISOLATED = "Isolated — worker subagent (per-step dispatch)";
+		const options =
+			canDispatch && recommendsIsolated
+				? [`★ ${ISOLATED} — planner pick: ${lastImplementerPick?.reason ?? "risky/long plan"}`, ...modelLabels]
+				: [...modelLabels, ...(canDispatch ? [ISOLATED] : [])];
+
 		const choice = await ctx.ui.select("Implement with which model?", options);
 		if (choice === undefined) return undefined;
-		return ordered[options.indexOf(choice)]?.model;
+
+		// The starred isolated label carries a "★ " prefix and a reason suffix, so
+		// match on the option body, not an exact/startsWith equality.
+		if (choice.includes(ISOLATED)) {
+			const modelChoice = await ctx.ui.select("Model for the isolated worker?", modelLabels);
+			if (modelChoice === undefined) return undefined;
+			const model = ordered[modelLabels.indexOf(modelChoice)]?.model;
+			return model ? { model, isolated: true } : undefined;
+		}
+		const model = ordered[options.indexOf(choice)]?.model;
+		return model ? { model, isolated: false } : undefined;
 	}
 
 	/**
@@ -434,6 +485,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		todoItems = [];
 		lastImplementerPick = undefined;
 		plannerModel = undefined;
+		implementerIsolated = false;
 		if (toolsBeforeReview) {
 			pi.setActiveTools(toolsBeforeReview);
 			toolsBeforeReview = undefined;
@@ -450,19 +502,51 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			await completePlan(ctx);
 			return;
 		}
-		const ok = await switchToRole(ctx, "reviewer", reviewer);
-		if (!ok) {
-			await completePlan(ctx);
-			return;
+		if (subagentToolActive()) {
+			// Dispatch-phase isolation: the reviewer runs as a subagent with an
+			// explicit model; the session keeps its own model for the relay turn.
+			reviewerModel = {
+				provider: reviewer.provider,
+				id: reviewer.id,
+				thinkingLevel: ROLE_THINKING.reviewer,
+			};
+		} else {
+			const ok = await switchToRole(ctx, "reviewer", reviewer);
+			if (!ok) {
+				await completePlan(ctx);
+				return;
+			}
+			reviewerModel = snapshotModel(ctx);
 		}
-
 		reviewing = true;
-		reviewerModel = snapshotModel(ctx);
 		// Read-only review: a fixed whitelist, not the inherited tool set (custom
-		// tools may mutate state).
+		// tools may mutate state). The subagent tool joins the whitelist when the
+		// subagent extension is loaded, so the review can be dispatched to the
+		// read-only `reviewer` agent in an isolated context.
 		toolsBeforeReview ??= pi.getActiveTools();
-		pi.setActiveTools(REVIEW_MODE_TOOLS);
+		pi.setActiveTools(subagentToolActive() ? [...REVIEW_MODE_TOOLS, "subagent"] : REVIEW_MODE_TOOLS);
 		persistState();
+
+		const planList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
+		const reviewerModelKey = reviewerModel ? modelKey({ provider: reviewerModel.provider, id: reviewerModel.id }) : "";
+		const reviewHow = subagentToolActive()
+			? `Dispatch the review to the read-only \`reviewer\` subagent instead of reviewing inline:
+
+subagent { "agent": "reviewer", "model": "${reviewerModelKey}", "task": "<review brief>" }
+
+Always pass the "model" override shown above — the reviewer must not silently inherit a different model.
+The subagent ends with \`Verdict: CLEAN\` or \`Verdict: FINDINGS (n)\`. Relay its verdict in your own response by mapping: CLEAN → \`Verdict: APPROVED\`; FINDINGS (n) → \`Verdict: CHANGES NEEDED\` followed by the findings as bullets. Never end your own response with CLEAN or FINDINGS.
+
+The subagent cannot see this conversation, so the brief must be self-contained:
+- The plan being reviewed:
+${planList}
+- What to review: the working tree against these plan steps. Run git status and git diff; read untracked files directly; read the changed files around each change (correctness, edge cases, error handling, security, tests, and whether each plan step is actually implemented).
+- The subagent must end with exactly one line: \`Verdict: CLEAN\` or \`Verdict: FINDINGS (n)\` with the blocking findings listed (file:line, what is wrong, what to change).
+
+Only the read-only reviewer agents (\`reviewer\`, \`reviewer-strong\`) may be dispatched, and you must not edit files yourself. When the subagent result returns, relay its verdict in your own response.`
+			: `- Run \`git status\` and \`git diff\`; read untracked files directly.
+- Read the changed files around each change: correctness, edge cases, error handling, security, tests, and whether each plan step is actually implemented.
+- Do NOT edit files. Report findings only.`;
 
 		pi.sendMessage(
 			{
@@ -471,9 +555,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 All plan steps are marked done. Review the implementation in the working tree against the plan in this conversation.
 
-- Run \`git status\` and \`git diff\`; read untracked files directly.
-- Read the changed files around each change: correctness, edge cases, error handling, security, tests, and whether each plan step is actually implemented.
-- Do NOT edit files. Report findings only.
+${reviewHow}
 
 End your response with exactly one of these lines:
 Verdict: APPROVED
@@ -526,14 +608,23 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		const implementer =
 			(implementerModel && ctx.modelRegistry.find(implementerModel.provider, implementerModel.id)) ??
 			resolveRoleModels(ctx, IMPLEMENTER_MODELS)[0]?.model;
-		if (implementer) await switchToRole(ctx, "implementer", implementer);
+		if (implementer && !implementerIsolated) {
+			// Inline mode: the fix turn runs on the implementer model. Isolated mode
+			// keeps the orchestrator's model — the fix dispatch carries the worker's
+			// model explicitly (see the fix message below).
+			await switchToRole(ctx, "implementer", implementer);
+		}
 		updateStatus(ctx);
 
 		const findings = verdict.findings.map((finding) => `- ${finding}`).join("\n");
+		const workerModel = implementerModel ? modelKey({ provider: implementerModel.provider, id: implementerModel.id }) : "";
+		const fixHow = implementerIsolated
+			? `Delegate each fix to the \`worker\` subagent — do not implement fixes inline. Dispatch with { "agent": "worker", "model": "${workerModel}", "task": "<self-contained fix brief>" }; the brief cannot see this conversation, so include the finding, the file and line, and what to change.`
+			: `Fix each finding now.`;
 		pi.sendMessage(
 			{
 				customType: "plan-review-fixes",
-				content: `[REVIEW CHANGES REQUESTED]\n\nThe reviewer (${reviewerModel?.id ?? "reviewer"}) found issues with the implementation:\n\n${findings || "(no findings listed)"}\n\nFix each finding now. Do not restate the plan; make the changes and leave the plan steps complete so the review can run again.`,
+				content: `[REVIEW CHANGES REQUESTED]\n\nThe reviewer (${reviewerModel?.id ?? "reviewer"}) found issues with the implementation:\n\n${findings || "(no findings listed)"}\n\n${fixHow} Do not restate the plan; make the changes and leave the plan steps complete so the review can run again.`,
 				display: true,
 			},
 			{ triggerTurn: true, deliverAs: "followUp" },
@@ -551,6 +642,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 			planner: plannerModel,
 			orchestrator,
 			implementer: implementerModel,
+			implementerIsolated,
 			reviewer: reviewerModel,
 			reviewing,
 			reviewRound,
@@ -575,6 +667,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		lastImplementerPick = undefined;
 		reviewRound = 0;
 		plannerModel = undefined;
+		implementerIsolated = false;
 
 		if (planModeEnabled) {
 			enablePlanModeTools();
@@ -704,22 +797,57 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 				ctx.ui.notify("No implementer selected — staying in plan mode.", "info");
 				return;
 			}
-			if (!(await switchToRole(ctx, "implementer", implementer))) {
-				ctx.ui.notify("Implementer switch failed — staying in plan mode.", "warning");
-				return;
+			if (implementer.isolated) {
+				// The orchestrator keeps its own model: each worker dispatch carries
+				// an explicit model override, so the session never runs on the
+				// implementer model during the (cheap) dispatch phase.
+				implementerModel = {
+					provider: implementer.model.provider,
+					id: implementer.model.id,
+					thinkingLevel: ROLE_THINKING.implementer,
+				};
+				implementerIsolated = true;
+				// keepSaved: completion must still be able to restore the orchestrator
+				// after a revise → re-approve-inline round-trip.
+				await restoreOrchestrator(ctx, true);
+				beginExecution(ctx);
+				ctx.ui.notify(
+					`Isolated implementer: worker subagents on ${modelKey(implementer.model)}; orchestrator keeps its own model.`,
+					"info",
+				);
+			} else {
+				if (!(await switchToRole(ctx, "implementer", implementer.model))) {
+					ctx.ui.notify("Implementer switch failed — staying in plan mode.", "warning");
+					return;
+				}
+				implementerModel = snapshotModel(ctx);
+				implementerIsolated = false;
+				beginExecution(ctx);
 			}
-			implementerModel = snapshotModel(ctx);
-
-			beginExecution(ctx);
 
 			const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
+			const workerModel = modelKey(implementer.model);
+			const how = implementer.isolated
+				? `Execute the plan by delegating each step to the \`worker\` subagent — do not implement the steps yourself.
+
+For each remaining step, in order:
+1. Dispatch subagent with { "agent": "worker", "model": "${workerModel}", "task": "<self-contained brief>" }.
+   The subagent cannot see this conversation: the brief must carry the step text, the plan context it
+   needs (intent, files, constraints), and the relevant verification to run. Always pass the
+   "model" override shown above — the worker must not silently inherit a different model.
+2. When the result returns, call plan_done with that step's number (e.g. {"steps":[2]}).
+3. If the worker did not complete the step, re-dispatch once with the failure context; if it
+   fails again, stop and report — never mark a failed step done.
+
+After the last step, summarize what was implemented.`
+				: `Start with: ${firstTodoItem.text}
+After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`;
 			const execMessage = `Execute the plan.
 
 Remaining steps:
 ${remainingList}
 
-Start with: ${firstTodoItem.text}
-After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`;
+${how}`;
 			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
 			pi.sendMessage(
 				{ customType: "plan-mode-execute", content: execMessage, display: true },
@@ -734,7 +862,7 @@ After completing each step, call the plan_done tool with that step's number imme
 			if (refinement?.trim()) {
 				// Local deviation from upstream: guardrails so the revise turn edits
 				// the plan instead of re-exploring the codebase from scratch.
-				const guarded = `[Plan revision] Apply the feedback below to the existing numbered plan. You already explored the codebase while planning — do NOT re-read files, re-run searches, or re-explore unless the feedback specifically requires verification. Output only the revised full plan in the same "Plan:" numbered format, and keep unchanged steps as-is.\n\nFeedback: ${refinement.trim()}`;
+				const guarded = `[PLAN REVISION — do NOT execute anything; do NOT run any tools that modify files or state. Present the revised plan and wait for the approval dialog] Apply the feedback below to the existing numbered plan. You already explored the codebase while planning — do NOT re-read files, re-run searches, or re-explore unless the feedback specifically requires verification. Output only the revised full plan in the same "Plan:" numbered format, and keep unchanged steps as-is.\n\nFeedback: ${refinement.trim()}`;
 				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
 				pi.sendUserMessage(guarded, { deliverAs: "followUp" });
 			}
@@ -834,10 +962,28 @@ After completing each step, call the plan_done tool with that step's number imme
 	});
 
 	// Bash stays read-only in plan mode and during the review pass. Execute mode
-	// otherwise has full access to every command.
+	// otherwise has full access to every command. Subagent dispatches are gated
+	// too: a subagent runs with its own tool set, so dispatching a mutating agent
+	// (worker) would bypass the read-only guarantee entirely.
 	pi.on("tool_call", async (event) => {
 		const restricted = reviewing || (planModeEnabled && !executionMode);
-		if (!restricted || event.toolName !== "bash") return;
+		if (!restricted) return;
+		if (event.toolName === "subagent") {
+			const agent = (event.input as { agent?: string }).agent;
+			const allowed = reviewing
+				? agent === "reviewer" || agent === "reviewer-strong"
+				: agent !== undefined && READONLY_AGENTS.has(agent);
+			if (!allowed) {
+				return {
+					block: true,
+					reason: reviewing
+						? "Review mode: only the read-only `reviewer` agent may be dispatched."
+						: "Plan mode: only read-only agents (scout, reviewer) may be dispatched — the worker agent can modify files.",
+					};
+			}
+			return;
+		}
+		if (event.toolName !== "bash") return;
 
 		const command = event.input.command as string;
 		if (!isSafeCommand(command)) {
@@ -857,6 +1003,11 @@ After completing each step, call the plan_done tool with that step's number imme
 		const mutating =
 			event.toolName === "edit" ||
 			event.toolName === "write" ||
+			// A dispatched worker's file changes happen in a child process and are
+			// not visible to this hook, so any subagent run during execution counts
+			// as mutating (a read-only dispatch just triggers an unneeded review —
+			// the safe direction).
+			event.toolName === "subagent" ||
 			(event.toolName === "bash" && !isSafeCommand(command));
 		if (mutating) {
 			mutatedThisExecution = true;
@@ -962,6 +1113,12 @@ When the user asks for plan changes, revise the plan text only — do not
 execute it and do not re-explore the codebase unless the change requires
 verification.
 
+A revision request is NEVER approval. After producing a revised plan, stop and
+wait for the approval dialog. Only "Approve — implement now" in the dialog, or
+the user explicitly saying "approve" or "implement", starts execution. Presenting
+a revised plan — even in response to the user restating the plan steps — does not
+grant permission to run anything.
+
 Before you stop, add exactly one unnumbered line after the plan, outside any
 code fence:
 
@@ -969,8 +1126,12 @@ Implementer: <model id> — <one-line reason>
 
 Choose from the implementation models by difficulty. Use GPT-6 Luna for trivial,
 mechanical changes, GLM 5.3 Flash for ordinary work, and a stronger model when
-the plan is risky or cross-cutting. The user confirms the pick before anything
-runs.
+the plan is risky or cross-cutting. For risky, long, or context-heavy plans,
+recommend isolated execution instead: write the line as
+Implementer: Isolated (<model id>) — <reason>
+(the word Isolated, then the worker's model id in parentheses) — the picker
+then offers the per-step worker-subagent dispatch first, with the orchestrator
+keeping its own model. The user confirms the pick before anything runs.
 
 Implementation models:
 ${implementerMenu}
@@ -989,7 +1150,15 @@ revised plan is presented for approval again.`,
 					customType: "plan-review-context",
 					content: `[REVIEWING IMPLEMENTATION — read-only]
 
-All plan steps are done. Review the implementation in the working tree against the plan in this conversation. Do NOT edit files.
+${subagentToolActive()
+	? `All plan steps are done. Review the implementation in the working tree against the plan in this conversation — via the read-only \`reviewer\` subagent, not inline:
+
+subagent { "agent": "reviewer", "model": "${reviewerModel ? modelKey({ provider: reviewerModel.provider, id: reviewerModel.id }) : ""}", "task": "<review brief>" }
+
+The brief must be self-contained (the subagent cannot see this conversation) and must include the plan steps:
+${todoItems.map((t) => `${t.step}. ${t.text}`).join("\n")}
+The subagent ends with \`Verdict: CLEAN\` or \`Verdict: FINDINGS (n)\`; relay its verdict by mapping CLEAN → \`Verdict: APPROVED\` and FINDINGS (n) → \`Verdict: CHANGES NEEDED\` with the findings as bullets. Only the read-only reviewer agents may be dispatched; do not edit files yourself.`
+	: `All plan steps are done. Review the implementation in the working tree against the plan in this conversation. Do NOT edit files.`}
 
 End your response with exactly one of these lines:
 Verdict: APPROVED
@@ -1004,6 +1173,11 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		if (executionMode && todoItems.length > 0) {
 			const remaining = todoItems.filter((t) => !t.completed);
 			const todoList = remaining.map((t) => `${t.step}. ${t.text}`).join("\n");
+			const how = implementerIsolated
+				? `Execute each remaining step by delegating it to the \`worker\` subagent (self-contained brief — the subagent cannot see this conversation), then call plan_done with that step's number. Re-dispatch a failed step once; never mark a failed step done. Do not implement steps yourself.`
+				: `Execute each step in order.
+Every tool and every bash command is available; nothing is restricted in execute mode.
+After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`;
 			return {
 				message: {
 					customType: "plan-execution-context",
@@ -1012,9 +1186,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 Remaining steps:
 ${todoList}
 
-Execute each step in order.
-Every tool and every bash command is available; nothing is restricted in execute mode.
-After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`,
+${how}`,
 					display: false,
 				},
 			};
@@ -1139,6 +1311,7 @@ After completing each step, call the plan_done tool with that step's number imme
 			plannerModel = planModeEntry.data.planner ?? plannerModel;
 			orchestrator = planModeEntry.data.orchestrator ?? orchestrator;
 			implementerModel = planModeEntry.data.implementer ?? implementerModel;
+			implementerIsolated = planModeEntry.data.implementerIsolated ?? implementerIsolated;
 			reviewerModel = planModeEntry.data.reviewer ?? reviewerModel;
 			reviewing = planModeEntry.data.reviewing ?? reviewing;
 			reviewRound = planModeEntry.data.reviewRound ?? reviewRound;
@@ -1175,7 +1348,7 @@ After completing each step, call the plan_done tool with that step's number imme
 		if (reviewing) {
 			// Resume mid-review: the reviewer keeps the fixed read-only tool set.
 			toolsBeforeReview ??= getNormalModeTools(REVIEW_MODE_TOOLS);
-			pi.setActiveTools(REVIEW_MODE_TOOLS);
+			pi.setActiveTools(subagentToolActive() ? [...REVIEW_MODE_TOOLS, "subagent"] : REVIEW_MODE_TOOLS);
 		} else if (planModeEnabled) {
 			enablePlanModeTools();
 		} else if (toolsBeforeReview) {

@@ -47,10 +47,10 @@ If `--reviewer` is passed, stop and say that review is no longer part of this sk
 
 The procedure is written once. Each harness has a different name for the same operation:
 
-| operation | Claude Code | OpenCode | agy |
-|---|---|---|---|
-| same-harness subagent | `Agent` tool with `model:` | subagent via `@agent` / task | `invoke_subagent` |
-| headless implementer on another harness | `run-harness.sh claude ...` | `run-harness.sh opencode ...` | `run-harness.sh agy ...` |
+| operation | pi | Claude Code | OpenCode | agy |
+|---|---|---|---|---|
+| same-harness subagent | `subagent` tool (model inherited from the dispatching session) | `Agent` tool with `model:` | subagent via `@agent` / task | `invoke_subagent` |
+| headless implementer on another harness | `run-harness.sh pi ...` | `run-harness.sh claude ...` | `run-harness.sh opencode ...` | `run-harness.sh agy ...` |
 
 Use the same-harness subagent when `IMPLEMENTER` names the harness you are running in. Use
 `run-harness.sh` for any other harness. The helper script lives at
@@ -59,7 +59,8 @@ Use the same-harness subagent when `IMPLEMENTER` names the harness you are runni
 ## Check for manifest
 
 If `$PROMPT_DIR/manifest.json` does not exist, tell the user:
-"No decomposition found. Run `/issue-decompose $REPO $ISSUE_NUM` first."
+"No decomposition found. Run `/issue-decompose $REPO $ISSUE_NUM` first (pi:
+`/skill:issue-decompose`)."
 Then stop.
 
 ## Run-all
@@ -205,7 +206,9 @@ Dispatch on `IMPLEMENTER`. The prompt is the same either way:
 - Do not edit dependency manifests unless the task requires it.
 
 **Same harness as this session:** spawn one subagent of the same harness with the model from
-`IMPLEMENTER`. In Claude Code that is `Agent` with `model:` and `subagent_type: general-purpose`.
+`IMPLEMENTER`. In pi that is the `subagent` tool with an explicit `model` override (per-dispatch
+`model: "provider/id"`); fall back to `run-harness.sh pi` if the override path is unavailable. In
+Claude Code that is `Agent` with `model:` and `subagent_type: general-purpose`.
 
 **Any other harness:**
 
@@ -276,13 +279,13 @@ important persistence point for resumability.
 
 ### h. Wait for CI + merge
 
-Use the read-only pr-watch helper for the exact repository and PR, with a bounded wait (for example
-`--interval 30 --max-ticks 40`). Mergeability alone does not prove checks passed.
+Watch CI in-session with `gh pr checks <n> --watch` for the exact repository and PR
+(`--interval 30` when supported). Mergeability alone does not prove checks passed.
 
 - Passing checks and satisfied branch requirements → the scope-aware pr-merge skill. For work
   repositories, leave the PR for human merge and stop dependent work. Record `merged` only after
   GitHub confirms it.
-- Failing checks → one scoped ci-fix commit and push, then resume observation. This is the explicitly
+- Failing checks → one scoped fix commit and push, then resume observation. This is the explicitly
   authorized repair for this workflow.
 - `DIRTY` (conflict) → report the divergence and request approved recovery. Do not rebase, amend or
   force-push automatically.
@@ -315,7 +318,7 @@ to `epic-review`.
 | implementer incomplete | ends without finishing or reports an error | keep partial work, run (c), (d), then (e); verify red → `failed`, halt |
 | verify red | non-zero verify command | fixer ×2 → else `failed`, halt |
 | out-of-scope files | `status --porcelain` vs `task.scope` | preserve files, halt, resolve ownership or scope |
-| CI red | `statusCheckRollup` FAILURE | `ci-fix` ×1 → else `failed`, halt |
+| CI red | `statusCheckRollup` FAILURE | one scoped fix commit+push ×1 → else `failed`, halt |
 | merge conflict | `mergeStateStatus: DIRTY` | halt, request approved recovery |
 | **usage limit** | log matches `usage limit\|rate limit\|resets at\|429` | **not a failure**. Parse the reset time, sleep until it + 120 s, do not increment `attempts`, retry the same task. Exit code 0 is possible on agy, so check the log, not only the exit code |
 | lock held | `mkdir` fails, exit 9 | abort; another driver is live |

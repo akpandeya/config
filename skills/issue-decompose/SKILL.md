@@ -19,7 +19,8 @@ inputs (manifest + task files) are saved to
 `${AGENT_PROMPTS_DIR:-${AGY_PROMPTS_DIR:-$HOME/.local/share/agent-prompts}}/<slug>/`
 (harness-neutral XDG data home, same convention as nvim's py-scratch/sql-scratch).
 
-Run `/epic-run` to decompose, implement and review in one go. Run this skill alone only to re-decompose
+Run `/epic-run` to decompose, implement and review in one go (Claude Code
+`/epic-run`, pi `/skill:epic-run`). Run this skill alone only to re-decompose
 or to inspect the task list.
 
 ## Parse arguments
@@ -55,7 +56,9 @@ scratch, and the publish step restores prior sub-issue numbers from the previous
 Use the decomposer prompt below. It is the same prompt on every harness.
 
 - **Same harness as this session, and a Claude model:** spawn an Agent with the model from
-  `DECOMPOSER`, and with extended thinking requested.
+  `DECOMPOSER`, and with extended thinking requested. In pi the `subagent` tool accepts a
+  per-dispatch `model` override (`provider/id`), so pass `model` with the chosen `DECOMPOSER`
+  model; fall through to `run-harness.sh` below only if that path is unavailable.
 - **Same harness, non-Claude model (e.g. OpenCode):** use that harness's subagent with the model.
 - **Any other harness:**
 
@@ -223,5 +226,6 @@ manifest after **every** task, so an interrupted publish resumes where it stoppe
 Publish the sub-issues (previous section), then read `$PROMPT_DIR/manifest.json` and show
 the user the task list with the sub-issue numbers as links. Point out that reviewing the
 plan on GitHub — editing or closing a sub-issue — is the intended gate before driving.
-Then tell them the next step: `/epic-run $REPO $ISSUE_NUM` runs the rest, or
+Then tell them the next step: `/epic-run $REPO $ISSUE_NUM` runs the rest (pi:
+`/skill:epic-run $REPO $ISSUE_NUM`), or
 `/epic-drive $REPO $ISSUE_NUM IMPLEMENTER=<harness>:<model>` drives the tasks directly.

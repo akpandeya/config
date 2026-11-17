@@ -45,9 +45,9 @@ Then work through each issue in order:
 3. Implement. Add/update spec in `docs/specs/` if it's a new module (SDD — see CONSTITUTION.md). Tag tests with `@pytest.mark.spec("module.F<n>")`.
 4. `uv run ruff check . && uv run ruff format . && uv run pytest` — must be green.
 5. Open PR with `Closes #<n>` in the body. Use the `pr-create` skill. Ensure all PR bodies include the signature footer `\n\n> _posted by autopilot_`.
-6. Watch CI via read-only `pr-watch`. This explicitly requested workflow separately
-   authorizes scoped ci-fix commits/pushes, within the stop conditions below.
-   Unknown status, watcher errors and timeout are not green.
+6. Watch CI in-session with `gh pr checks <n> --watch`. This explicitly requested workflow
+   authorizes scoped fix commits/pushes for this PR, within the stop conditions below.
+   Unknown status, errors and timeout are not green.
 7. When green, squash-merge (personal repo — use `pr-merge` skill).
 8. **After merge: ping Matrix** with PR link and title:
 

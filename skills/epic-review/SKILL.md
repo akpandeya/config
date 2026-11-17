@@ -68,8 +68,13 @@ Repeat for `round` = 1, 2, ... up to 5.
    - re-run the `VERIFY` commands (listed in the prompt, in order) after your edits;
    - end with exactly one final line, `VERDICT: APPROVE` or `VERDICT: BLOCK <reason>`.
 4. **Run a fresh reviewer.** A new instance every round, never the previous one:
-   - **Same harness as this session:** a subagent with that model (in Claude Code, `Agent` with `model:`),
-     told to work in `$TMP` with absolute paths. Ask for a summary of at most 60 lines.
+   - **Same harness as this session:** a subagent with that model (in Claude Code, `Agent` with
+     `model:`; in pi, the `subagent` tool with the `worker` agent and an explicit `model` override —
+     the `reviewer` agent is read-only and cannot apply the fixes this review requires). If the
+     override path is unavailable, use `run-harness.sh pi` instead. Give the subagent the full
+     prompt text: it may edit files in `$TMP` (absolute paths) but must not `git add`, `git
+     commit`, `git push` or open PRs — the driver owns publishing. Ask for a summary of at most
+     60 lines.
    - **Any other harness:**
 
      ```bash
@@ -88,7 +93,8 @@ Repeat for `round` = 1, 2, ... up to 5.
 7. **Decide.**
    - Files changed: commit them on a branch `review/<slug>-r<round>` from `$TMP` (git-commit skill, explicit
      paths, actual harness and model attribution), push, and open a PR through the same publish, CI and merge
-     gates as an `epic-drive` task (pr-create, pr-watch, then pr-merge). Verify must be green before the
+     gates as an `epic-drive` task (pr-create, then `gh pr checks <review-pr-number> --watch --repo <owner/repo>` on
+     the exact PR `pr-create` returned, then pr-merge). Verify must be green before the
      PR is opened; if it is red, the round fails: set `epicReview: "blocked"` and report. In a work repo, leave
      the PR for human merge, record it as `reviewPr`, leave `epicReview: "reviewing"`, print the resume line
      and stop. After the merge, re-running `/epic-review` starts the next round. Personal repos merge and

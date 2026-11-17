@@ -402,19 +402,38 @@ link_config "$REPO_DIR/claude/skills/jarvis-suggest/SKILL.md" \
 link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
             "$HOME/.claude/skills/slack-catchup/SKILL.md"
 
-# Every non-jarvis skill in claude/skills/ is symlinked whole-dir into
-# ~/.claude/skills/ (not just SKILL.md) so a skill can grow scripts or
-# reference docs alongside its entry point. Driven by a glob so it never
-# drifts from the repo contents. Jarvis-managed skills (jarvis-suggest,
-# jarvis-continue-in-phone, slack-catchup) are handled separately above
-# or by Jarvis itself.
-for skill_dir in "$REPO_DIR"/claude/skills/*/; do
+# Every non-jarvis skill is symlinked whole-dir into ~/.claude/skills/ (not
+# just SKILL.md) so a skill can grow scripts or reference docs alongside its
+# entry point. Driven by a glob so it never drifts from the repo contents.
+# Skills live in two repo locations: the harness-neutral skills/ (shared with
+# pi/opencode/copilot via ~/.agents/skills, see below) and claude/skills/
+# (harness-coupled: jarvis-managed skills and Claude-only glue; shared skills
+# live in skills/ above).
+# Jarvis-managed skills (jarvis-suggest, jarvis-continue-in-phone,
+# slack-catchup) are handled separately above or by Jarvis itself.
+for skills_root in "$REPO_DIR/skills" "$REPO_DIR/claude/skills"; do
+    for skill_dir in "$skills_root"/*/; do
+        [ -f "$skill_dir/SKILL.md" ] || continue
+        skill="$(basename "$skill_dir")"
+        case "$skill" in
+            jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
+        esac
+        link_config "$skill_dir" "$HOME/.claude/skills/$skill"
+    done
+done
+
+# Agent Skills shared location: ~/.agents/skills/ is read natively by pi,
+# opencode and copilot. Only the harness-neutral skills/ tree goes here —
+# claude/skills entries stay Claude-only unless later promoted.
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Would create: $HOME/.agents/skills"
+else
+    mkdir -p "$HOME/.agents/skills"
+fi
+for skill_dir in "$REPO_DIR"/skills/*/; do
     [ -f "$skill_dir/SKILL.md" ] || continue
     skill="$(basename "$skill_dir")"
-    case "$skill" in
-        jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
-    esac
-    link_config "$skill_dir" "$HOME/.claude/skills/$skill"
+    link_config "$skill_dir" "$HOME/.agents/skills/$skill"
 done
 
 # --- Setup Shared Antigravity (AGY) & Claude Global Settings and Skills ---
@@ -466,14 +485,16 @@ link_config "$REPO_DIR/claude/personal-skills-plugin.json" \
 
 # Symlink all non-jarvis skills to Antigravity's personal-skills plugin. The same
 # skill files serve every harness, so there are no separate gemini copies.
-for skill_dir in "$REPO_DIR"/claude/skills/*/; do
-    [ -f "$skill_dir/SKILL.md" ] || continue
-    skill="$(basename "$skill_dir")"
-    case "$skill" in
-        jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
-    esac
-    link_config "$skill_dir" \
-                "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
+for skills_root in "$REPO_DIR/skills" "$REPO_DIR/claude/skills"; do
+    for skill_dir in "$skills_root"/*/; do
+        [ -f "$skill_dir/SKILL.md" ] || continue
+        skill="$(basename "$skill_dir")"
+        case "$skill" in
+            jarvis-suggest|jarvis-continue-in-phone|slack-catchup) continue ;;
+        esac
+        link_config "$skill_dir" \
+                    "$HOME/.gemini/config/plugins/personal-skills/skills/$skill"
+    done
 done
 
 # Stable path for the harness-neutral helper scripts used by the epic skills.
@@ -533,9 +554,21 @@ for prompt_file in "$REPO_DIR"/claude/prompts/*.md; do
     link_config "$prompt_file" \
                 "$HOME/.claude/prompts/$(basename "$prompt_file")"
 done
-for agent in ci-observer.md ci-fixer.md doc-writer.md; do
+for agent in doc-writer.md; do
     link_config "$REPO_DIR/claude/agents/$agent" \
                 "$HOME/.claude/agents/$agent"
+done
+
+# Pi prompt templates: /pick-up-ticket in pi sessions.
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Would create: $HOME/.pi/agent/prompts"
+else
+    mkdir -p "$HOME/.pi/agent/prompts"
+fi
+for prompt_md in "$REPO_DIR"/pi/prompts/*.md; do
+    [ -e "$prompt_md" ] || continue
+    link_config "$prompt_md" \
+                "$HOME/.pi/agent/prompts/$(basename "$prompt_md")"
 done
 
 # User-scoped MCP servers (available in every project on this machine).
@@ -759,10 +792,10 @@ elif [ "$DRY_RUN" = "1" ]; then
     echo "Would run: uv tool install --upgrade desloppify[full]"
 else
     uv tool install --upgrade "desloppify[full]"
-    echo "✓ desloppify CLI installed (skill is symlinked under ~/.claude/skills/desloppify)"
+    echo "✓ desloppify CLI installed (skill is symlinked under ~/.agents/skills/desloppify)"
     echo "  When desloppify ships a new SKILL.md (e.g. v6 → v7), refresh it with:"
     echo "    cd $REPO_DIR && desloppify update-skill claude"
-    echo "    git -C $REPO_DIR add claude/skills/desloppify/SKILL.md && git -C $REPO_DIR commit -m 'chore: bump desloppify skill'"
+    echo "    git -C $REPO_DIR add skills/desloppify/SKILL.md && git -C $REPO_DIR commit -m 'chore: bump desloppify skill'"
 fi
 
 echo

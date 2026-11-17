@@ -93,9 +93,9 @@ jarvis bridge send --scope "$SCOPE" --kind pr_ready \
 
 ## Step 8 — CI
 
-Watch CI via the read-only `pr-watch` skill. This end-to-end workflow separately
-authorizes `ci-fix` for the exact PR, including scoped commits/pushes. Attempt up
-to **5 times**; merely invoking pr-watch elsewhere never authorizes repair.
+Watch CI in-session with `gh pr checks <n> --watch`. This end-to-end workflow
+authorizes scoped fix commits/pushes for the exact PR. Attempt up
+to **5 times**; watching a PR in any other context never authorizes repair.
 
 ```bash
 # after each failed attempt:

@@ -49,12 +49,14 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 |---|---|
 | `brew-packages.txt` | Everything Homebrew installs |
 | `agents/communication.md` | Shared plain-language and local-explanation preferences |
-| `claude/skills/` | Personal skills, linked into Claude and the Gemini personal-skills plugin. Company-specific skills live in the private work-context repo. Jarvis-managed skill directories retain their own installation |
+| `skills/` | Harness-neutral skills, symlinked into `~/.agents/skills/` (read natively by pi, opencode and copilot) and into `~/.claude/skills/` and the Gemini personal-skills plugin. All harnesses share the same files — no per-harness forks |
+| `claude/skills/` | Harness-coupled skills kept Claude-only: jarvis-managed (`jarvis-suggest`, `jarvis-continue-in-phone`, `slack-catchup`), `prompt` (clipboard copier), and any not yet promoted to `skills/`. Company-specific skills live in the private work-context repo. Jarvis-managed skill directories retain their own installation |
 | `claude/hooks/` | Claude Code hook scripts. None are wired up right now (`settings-hooks.json` has an empty `PostToolUse`), so `jarvis-register.sh` is not active |
 | `claude/settings-hooks.json` | Merged into `~/.claude/settings.json` — only replaces `hooks.PostToolUse`, preserves everything else |
 | `gitconfig/` | Scoped git identity + signing templates rendered to `~/.gitconfig-personal` / `~/.gitconfig-work` by the bootstrap (see `gitconfig/README.md`). Real emails live in `emails.local.env` (gitignored — never commit them) |
 | `kitty/` | Terminal config |
-| `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only planning that asks **Approve / Keep planning / Revise** until you approve, then executes with step tracking; `Shift+Tab`). `pi/keybindings.json` moves thinking-level cycling to `Alt+T` to free `Shift+Tab` |
+| `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only planning that asks **Approve / Keep planning / Revise** until you approve, then executes with step tracking; `Shift+Tab`; the review pass and optionally the implementer run as isolated subagents). `pi/keybindings.json` moves thinking-level cycling to `Alt+T` to free `Shift+Tab`. `pi/prompts/` holds pi prompt templates (`/pick-up-ticket`), symlinked into `~/.pi/agent/prompts/` |
+| `agents/` | Shared communication policy composed into every harness's global instructions by `scripts/install-agent-instructions.py` |
 | `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
 | `shell/` | Shared shell aliases (incl. `va`: activate the nearest `.venv`, walking up) + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |

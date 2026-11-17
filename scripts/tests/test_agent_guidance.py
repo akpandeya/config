@@ -39,6 +39,7 @@ class InstructionsTest(unittest.TestCase):
             "opencode/AGENTS.md": "Personal rules",
             "agents/communication.md": "Plain language",
             "claude/RTK.md": "RTK rules",
+            "pi/AGENTS-extra.md": "Ticket routing rules",
         }.items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +62,7 @@ class InstructionsTest(unittest.TestCase):
             self.assertTrue(path.is_symlink())
             self.assertIn("Plain language", path.read_text())
             self.assertEqual("RTK rules" in path.read_text(), harness in ("claude", "opencode"))
+            self.assertEqual("Ticket routing rules" in path.read_text(), harness == "pi")
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_private_context_before_or_after_personal_install(self):
@@ -304,7 +306,7 @@ class ExplainerTest(unittest.TestCase):
             self.assertIn("placeholder", str(ctx.exception))
 
     def test_skill_review_template_renders(self):
-        skill = (ROOT / "claude/skills/deep-review/SKILL.md").read_text()
+        skill = (ROOT / "skills/deep-review/SKILL.md").read_text()
         marker = skill.index("Review template")
         template = re.search(r"```json\n(.*?)```", skill[marker:], re.DOTALL).group(1)
         values = {

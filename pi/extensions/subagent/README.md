@@ -140,6 +140,8 @@ System prompt for the agent goes here.
 
 When `model` is omitted, the subagent inherits the dispatching session's active model and thinking level.
 
+**Per-dispatch model override:** every dispatch form (`agent`+`task` single mode, `tasks[]`, `chain[]`) also accepts an optional `model` argument (`provider/id`). It takes precedence over the agent file's pin and over session inheritance — e.g. `subagent { agent: "worker", model: "ai-model-router/Claude Opus 5.5", task: "..." }` runs that one dispatch on Opus regardless of what the session or the agent file says. A dispatch with an override does not inherit the session's thinking level.
+
 **Locations:**
 - `~/.pi/agent/agents/*.md` - User-level (with `agentScope: "user"` or `"both"`)
 - `.pi/agents/*.md` - Project-level (only with `agentScope: "project"` or `"both"`)

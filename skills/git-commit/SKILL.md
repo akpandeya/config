@@ -10,9 +10,12 @@ job is staging the right files and writing the message.
 
 ## Pre-flight
 
-!`git status --short`
+Run these first with the Bash tool before doing anything else:
 
-!`git diff --stat`
+```bash
+git status --short
+git diff --stat
+```
 
 Only commit when the user has asked. Stage explicitly — `git add
 <file>` for each intended file, never a blanket `git add -A`.

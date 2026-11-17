@@ -3,7 +3,7 @@ Ship groomed issues in dependency order within the scope below. Routine choices
 are autonomous; unresolved authorization or new scope blocks that action rather
 than being guessed. A user stop/pause or changed request takes precedence.
 
-Use the tracked, bounded pr-watch observer. Unknown status, errors and timeout
+Watch CI in-session with `gh pr checks <n> --watch`. Unknown status, errors and timeout
 are not green. Do not bypass a tool's permission or publication boundary.
 
 # Step 1 — Build the queue (dependency tree first, tier second)
@@ -34,8 +34,8 @@ For each issue:
    substantial independent investigation.
 4. **Implement.** Keep diffs minimal. SDD: new modules need a spec in `docs/specs/`; tag tests `@pytest.mark.spec("module.F<n>")`. Run `uv run ruff check . && uv run ruff format . && uv run pytest` until green.
 5. **PR** via `pr-create` skill, body includes `Closes #<N>`. After non-draft PR opens → ping `kind=pr_ready` with `#N · <title> · <url>`.
-6. **CI** via read-only pr-watch, then separately authorized scoped ci-fix
-   commits/pushes. Up to 5 attempts. After 5 failures, block the task and all its
+6. **CI** via `gh pr checks <n> --watch`, then scoped fix commits/pushes for that PR.
+   Up to 5 attempts. After 5 failures, block the task and all its
    dependents; only independent tasks can continue in clean, owned workspaces.
 7. **Merge** via `pr-merge` (personal repo, squash). Then ping `Done: #<N>`.
 8. **Refresh queue** — re-run the `gh issue list` query. Newly-unblocked issues get inserted at the right topo position. Issues closed mid-run get dropped.

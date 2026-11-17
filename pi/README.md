@@ -82,6 +82,35 @@ Local deviations from upstream:
   plan…`); upstream's third option `Keep planning` was a no-op fallthrough
   identical to dismissing the dialog, so it was removed — Esc means keep
   planning.
+- **Revision-approval guard**: the injected "Revise plan…" prefix is
+  `[PLAN REVISION — do NOT execute anything; do NOT run any tools that modify
+  files or state. Present the revised plan and wait for the approval dialog]`,
+  and the plan-mode prompt states explicitly that a revision request is never
+  approval — only the dialog's Approve (or the user saying "approve"/
+  "implement") starts execution. Before this, an agent occasionally treated
+  the echoed revision message (or a restated plan) as approval and started
+  executing while still in plan mode, getting every write command blocked.
+- **Subagent-backed review and implementer**: when the `subagent` extension is
+  loaded, the deep-review pass is dispatched to the read-only `reviewer` agent
+  as an isolated subagent (fresh context — the reviewer no longer re-reads the
+  implementer's own reasoning) with an explicit per-dispatch `model` override,
+  and the parent relays `Verdict: CLEAN` / `Verdict: FINDINGS (n)` to the
+  extension's `Verdict: APPROVED` / `Verdict: CHANGES NEEDED` contract. Without
+  the extension the in-session read-only review (with the model switch) is the
+  fallback. The implementer picker gains an "Isolated — worker subagent
+  (per-step dispatch)" option: each plan step is delegated to a `worker`
+  subagent with an explicit model, and the orchestrator **keeps its own model**
+  for dispatch and failure recovery — orchestrator and worker models are
+  decoupled. The planner can recommend isolation for risky/long plans by
+  writing `Implementer: Isolated (<model id>) — <reason>`, which stars the
+  isolated option; inline execution stays the Enter-default otherwise. To
+  support this, the `subagent` tool accepts a per-dispatch `model` override
+  (single/tasks/chain) that beats the agent's pin and session inheritance.
+  Safety: in plan mode only read-only agents (scout, reviewer) may be
+  dispatched, in review mode only the reviewer agents — dispatching `worker`
+  from a read-only phase is blocked, because a subagent's own tool set would
+  otherwise bypass the guarantee. A subagent run during execution counts as
+  mutating for the review-skip check.
 - Added `Shift+Tab` to enter plan mode and, once a plan exists, to open the
   approval dialog instead of executing straight away. The agent also gets the
   dialog after every plan turn, so approve → keep planning → revise loops until

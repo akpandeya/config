@@ -368,6 +368,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	modelOverride: string | undefined,
 ): Promise<SingleResult> {
 	if (signal?.aborted) {
 		return createUnstartedResult(agentName, task, step, "aborted", "Subagent was aborted before starting");
@@ -387,8 +388,10 @@ async function runSingleAgent(
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const inheritsDispatchConfig = !agent.model;
-	const model = agent.model ?? dispatchDefaults.model;
+	// Per-dispatch override wins over the agent file's pin, which wins over
+	// inheriting the dispatching session's model.
+	const inheritsDispatchConfig = !agent.model && !modelOverride;
+	const model = modelOverride ?? agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
 	if (inheritsDispatchConfig && dispatchDefaults.thinkingLevel) {
 		args.push("--thinking", dispatchDefaults.thinkingLevel);
@@ -580,12 +583,18 @@ const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	model: Type.Optional(
+		Type.String({ description: "Model override for this dispatch (provider/id). Takes precedence over the agent's pin and session inheritance." }),
+	),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	model: Type.Optional(
+		Type.String({ description: "Model override for this dispatch (provider/id). Takes precedence over the agent's pin and session inheritance." }),
+	),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -596,6 +605,9 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
+	model: Type.Optional(
+		Type.String({ description: "Model override for single mode (provider/id). Takes precedence over the agent's pin and session inheritance." }),
+	),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
 	agentScope: Type.Optional(AgentScopeSchema),
@@ -735,6 +747,7 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						step.model,
 					);
 					results.push(result);
 
@@ -826,6 +839,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						t.model,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -862,6 +876,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					params.model,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {

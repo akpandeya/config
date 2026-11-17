@@ -47,7 +47,7 @@ interactive, asks the batch, runs harness calls in the background.
   upfront batch; ask only for answers that are missing. `SHIP=yes` is the explicit
   ship opt-in; without it, never ship.
 - `--headless`: nobody can answer questions. Requires all four batch answers via
-  arguments — if any is missing, stop and name it. Never call AskUserQuestion. Run
+  arguments — if any is missing, stop and name it. Never call the dialog tool. Run
   every harness call and the verify command in the **foreground**: this session may be
   a one-shot headless turn that ends when the turn ends, abandoning background jobs.
   Where the skill would stop to ask, take the conservative option that keeps the build
@@ -97,10 +97,10 @@ with context, and copy the body to `$SCRATCH/<issue>/issue.md`.
 Skip whatever the arguments already answered (`IMPLEMENT=`, `REVIEW=`, `FIX=`, `SHIP=`);
 under `--headless`, skip this step entirely — all four answers must have come from
 arguments. Ask everything remaining now, before any stage runs. Do not ask again mid-run.
-Two AskUserQuestion calls, back to back with no other work between them — AskUserQuestion
-fits at most 4 questions per call.
+Two dialog calls, back to back with no other work between them — `ask_user` (pi) /
+`AskUserQuestion` (Claude Code) fits at most 4 questions per call.
 
-Ask with AskUserQuestion. Options come from step 1. Offer the last choice as the first option.
+Ask with the dialog tool. Options come from step 1. Offer the last choice as the first option.
 
 **First call — harness per stage.** One question each for:
 
@@ -108,13 +108,13 @@ Ask with AskUserQuestion. Options come from step 1. Offer the last choice as the
 - `REVIEW`: read-only check of the diff
 - `FIX`: applies one round of findings
 
-Options are the harnesses that returned models in step 1 (`claude`, `opencode`, `agy`). Use the
+Options are the harnesses that returned models in step 1 (`pi`, `claude`, `opencode`, `agy`). Use the
 fourth question for **Ship after CLEAN?** — push the branch, open a PR and merge once review is
 clean. Yes/no, default no. A later request to ship must be explicit; a `CLEAN` verdict alone is
 never authorization.
 
 **Second call — model per stage**, using each stage's harness picked in the first call. One
-question per stage, options only from that harness's lines in the step 1 output. AskUserQuestion
+question per stage, options only from that harness's lines in the step 1 output. The dialog
 shows few options, so list the most relevant few (the user's last choice first) and treat a
 free-typed model as valid only if it appears in the step 1 output for that harness. Use the fourth
 question for the **Verify command**, and only when the repo's instruction files do not define one
@@ -143,10 +143,10 @@ Run it in the background and wait for the completion notification (foreground un
 
 On harness failure (non-zero exit, permission denial, or an `agy` out-of-credits message):
 with `--fallback`, retry this stage once with the fallback model first. Otherwise, or when
-the fallback also fails, stop and ask again with AskUserQuestion — harness first, then a
-model from that harness's step 1 output — offering the stages that had not run yet. The
-new choice applies to the remaining stages. Never fall back silently. Under `--headless`,
-never ask: a failed fallback means stop with status `FAILED`.
+the fallback also fails, stop and ask again with the dialog tool (`ask_user` / `AskUserQuestion`) —
+harness first, then a model from that harness's step 1 output — offering the stages that had not
+run yet. The new choice applies to the remaining stages. Never fall back silently. Under
+`--headless`, never ask: a failed fallback means stop with status `FAILED`.
 
 ## 4. Verify
 
@@ -162,8 +162,10 @@ log for failures. A green verify is required before review.
 Use the `REVIEW` harness and model from the batch.
 
 - Harness `claude`: use the Agent tool with the chosen model. It must not edit files.
-- Any other harness: run `run-harness.sh <harness> <model> review ...` with a prompt that forbids
-  edits.
+- Any other harness, including `pi`: run `run-harness.sh <harness> <model> review ...` with a prompt
+  that forbids edits. Do not use a pi `subagent` here: its `reviewer` agent emits a different
+  verdict contract (`Verdict: CLEAN` / `Verdict: FINDINGS (n)`) than the `CLEAN` /
+  numbered-findings format this step parses.
 
 The brief must be self-contained. Include:
 
