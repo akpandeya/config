@@ -543,6 +543,8 @@ ${planList}
 - What to review: the working tree against these plan steps. Run git status and git diff; read untracked files directly; read the changed files around each change (correctness, edge cases, error handling, security, tests, and whether each plan step is actually implemented).
 - The subagent must end with exactly one line: \`Verdict: CLEAN\` or \`Verdict: FINDINGS (n)\` with the blocking findings listed (file:line, what is wrong, what to change).
 
+The reviewer's bash is allowlist-enforced, not just requested read-only: non-allowlisted commands are blocked by a tool gate in the child, so do not ask the reviewer to run mutating commands — they will fail.
+
 Only the read-only reviewer agents (\`reviewer\`, \`reviewer-strong\`) may be dispatched, and you must not edit files yourself. When the subagent result returns, relay its verdict in your own response.`
 			: `- Run \`git status\` and \`git diff\`; read untracked files directly.
 - Read the changed files around each change: correctness, edge cases, error handling, security, tests, and whether each plan step is actually implemented.
@@ -1157,7 +1159,7 @@ subagent { "agent": "reviewer", "model": "${reviewerModel ? modelKey({ provider:
 
 The brief must be self-contained (the subagent cannot see this conversation) and must include the plan steps:
 ${todoItems.map((t) => `${t.step}. ${t.text}`).join("\n")}
-The subagent ends with \`Verdict: CLEAN\` or \`Verdict: FINDINGS (n)\`; relay its verdict by mapping CLEAN → \`Verdict: APPROVED\` and FINDINGS (n) → \`Verdict: CHANGES NEEDED\` with the findings as bullets. Only the read-only reviewer agents may be dispatched; do not edit files yourself.`
+The subagent ends with \`Verdict: CLEAN\` or \`Verdict: FINDINGS (n)\`; relay its verdict by mapping CLEAN → \`Verdict: APPROVED\` and FINDINGS (n) → \`Verdict: CHANGES NEEDED\` with the findings as bullets. The reviewer's bash is allowlist-enforced in the child (non-allowlisted commands are blocked by a tool gate), so keep the brief to read-only commands. Only the read-only reviewer agents may be dispatched; do not edit files yourself.`
 	: `All plan steps are done. Review the implementation in the working tree against the plan in this conversation. Do NOT edit files.`}
 
 End your response with exactly one of these lines:

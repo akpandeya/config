@@ -397,6 +397,10 @@ async function runSingleAgent(
 		args.push("--thinking", dispatchDefaults.thinkingLevel);
 	}
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+	// Tool-enforced read-only bash in the child (see readonly-bash.ts). Without
+	// the extension loaded the child would reject the unknown flag and fail
+	// rather than run unrestricted — fail closed.
+	if (agent.bashAllowlist) args.push("--readonly-bash");
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;

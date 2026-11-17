@@ -334,6 +334,11 @@ link_config "$REPO_DIR/pi/extensions/questionnaire.ts" \
 # inline-bash expands !{command} in prompts before sending (see pi/README.md).
 link_config "$REPO_DIR/pi/extensions/inline-bash.ts" \
             "$HOME/.pi/agent/extensions/inline-bash.ts"
+# readonly-bash tool-enforces the plan-mode bash allowlist in child pi
+# processes: subagent dispatches pass --readonly-bash for agents whose
+# frontmatter sets bashAllowlist (e.g. the reviewer).
+link_config "$REPO_DIR/pi/extensions/readonly-bash.ts" \
+            "$HOME/.pi/agent/extensions/readonly-bash.ts"
 # subagent delegates tasks to isolated pi processes. Its sample agents and
 # workflow prompts live in subdirectories and must be linked separately.
 link_config "$REPO_DIR/pi/extensions/subagent" \

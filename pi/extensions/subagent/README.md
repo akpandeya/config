@@ -133,12 +133,15 @@ name: my-agent
 description: What this agent does
 tools: read, grep, find, ls
 model: claude-haiku-4-5
+bashAllowlist: true
 ---
 
 System prompt for the agent goes here.
 ```
 
 When `model` is omitted, the subagent inherits the dispatching session's active model and thinking level.
+
+**`bashAllowlist: true`** runs the child pi process with `--readonly-bash` (local-only `readonly-bash.ts` extension, symlinked next to the others). The child's bash calls are then tool-enforced against the plan-mode allowlist (`plan-mode/utils.ts` `isSafeCommand`): non-allowlisted commands are blocked by the `tool_call` gate instead of merely being requested against in the prompt. Omitting the key (or anything but literal `true`) leaves the child's bash unrestricted. Without the extension loaded the child rejects the unknown flag and fails — it never ends up unrestricted.
 
 **Per-dispatch model override:** every dispatch form (`agent`+`task` single mode, `tasks[]`, `chain[]`) also accepts an optional `model` argument (`provider/id`). It takes precedence over the agent file's pin and over session inheritance — e.g. `subagent { agent: "worker", model: "ai-model-router/Claude Opus 5.5", task: "..." }` runs that one dispatch on Opus regardless of what the session or the agent file says. A dispatch with an override does not inherit the session's thinking level.
 

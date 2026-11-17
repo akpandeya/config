@@ -110,7 +110,9 @@ Local deviations from upstream:
   dispatched, in review mode only the reviewer agents — dispatching `worker`
   from a read-only phase is blocked, because a subagent's own tool set would
   otherwise bypass the guarantee. A subagent run during execution counts as
-  mutating for the review-skip check.
+  mutating for the review-skip check. The dispatched review briefs also state
+  that the reviewer's bash is allowlist-enforced (not just requested read-only);
+  see the `readonly-bash.ts` bullet under subagent below.
 - Added `Shift+Tab` to enter plan mode and, once a plan exists, to open the
   approval dialog instead of executing straight away. The agent also gets the
   dialog after every plan turn, so approve → keep planning → revise loops until
@@ -226,7 +228,13 @@ differs from upstream — its deviations are documented in
 `reviewer-strong` agent (pinned to `ai-model-router/Claude Opus 5.5`) backs
 the escalation path of the `/implement-and-review` loop, and model pins that
 don't exist on the HF model router were dropped (agents without a pin inherit
-the dispatching session's model).
+the dispatching session's model). Agents whose frontmatter sets
+`bashAllowlist: true` (currently `reviewer`) run the child with
+`--readonly-bash`, and the local-only `readonly-bash.ts` extension then
+tool-enforces the plan-mode bash allowlist in that child — closing the gap
+where the read-only reviewer's bash was only prompt-constrained. Plan mode's
+review briefs mention the enforcement so the orchestrator doesn't ask the
+reviewer to run blocked commands.
 
 The bootstrap symlinks the sample agents (`scout`, `planner`, `reviewer`,
 `reviewer-strong`, `worker`) into `~/.pi/agent/agents/` and the workflow
@@ -273,7 +281,10 @@ startup, and registered extension flags show up in `--help`):
 
 ```bash
 pi --help | grep -- --plan    # plan-mode registered its flag -> it loaded
-cd $(mktemp -d) && pi -p "Reply with ok"   # headless run, no startup errors
+cd $(mktemp -d) && pi -p "Reply with ok"; cd -   # headless run, no startup errors
+python3 -m unittest scripts.tests.test_pi_extensions -v
+# unit tests for the readonly-bash gate, bashAllowlist parsing and the child
+# argv wiring (node --test under the hood; see scripts/tests/pi_extensions.test.mjs)
 # then in pi: /add-echo-tool mytest  (dynamic-tools), /reload after edits,
 # and prompt: branch is !{git branch --show-current}   (inline-bash)
 ```

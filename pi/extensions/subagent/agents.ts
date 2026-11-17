@@ -13,6 +13,8 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	/** Run the child with --readonly-bash (bash restricted to the plan-mode allowlist). */
+	bashAllowlist?: boolean;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -36,6 +38,7 @@ type AgentFrontmatter = {
 	description?: unknown;
 	tools?: unknown;
 	model?: unknown;
+	bashAllowlist?: unknown;
 };
 
 /**
@@ -96,6 +99,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			description: frontmatter.description,
 			tools: parseToolList(frontmatter.tools),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			bashAllowlist: frontmatter.bashAllowlist === true,
 			systemPrompt: body,
 			source,
 			filePath,
