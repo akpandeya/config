@@ -4,18 +4,20 @@ Config that belongs to [Pi](https://github.com/earendil-works/pi) (`pc` / `pi`).
 
 ## extensions/
 
-Pi auto-discovers extensions in `~/.pi/agent/extensions/`. Entries here are
-symlinked there by `setup-dev-env.sh`, so the repo stays the source of truth
-and edits are live without re-running setup (Pi reads the files at startup;
-`/reload` picks up changes in a running session).
+Pi auto-discovers extensions in `~/.pi/agent/extensions/`. `setup-dev-env.sh`
+symlinks the entries marked *linked* below (the repo stays the source of
+truth, so edits are live without re-running setup; Pi reads the files at
+startup; `/reload` picks up changes in a running session). Entries marked
+*unlinked* are templates or optional tools — link them yourself if needed.
 
 | Extension | What it does |
 |---|---|
 | `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking, a multi-column progress widget (`/todos`), role-based models (planner picker → implementer picker → read-only deep review → orchestrator restore) and a review loop that sends findings back to the implementer |
 | `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
-| `inline-bash.ts` | Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
-| `subagent/` | Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
-| `dynamic-tools.ts` | Template for runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
+| `inline-bash.ts` | *linked*. Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
+| `subagent/` | *linked*. Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
+| `dynamic-tools.ts` | *unlinked template*. Runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want, then link it |
+| `rtk.ts`, `ask-user.ts` | *unlinked* — kept for reference; link only if needed |
 | `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Single override: `app.thinking.cycle` moves to `Alt+T`, freeing `Shift+Tab` for plan-mode |
 | `mcp/ddg-search/` | Local DuckDuckGo web-search MCP server (see below) |
 
@@ -36,9 +38,12 @@ Registered user-level in `~/.pi/agent/mcp.json` (see `pi mcp list`):
 }
 ```
 
-`node_modules` is gitignored; after cloning run `npm i` inside the directory.
-One tool: `duckduckgo_web_search` (query, count 1-20, safeSearch), default
-`codemode` exposure — callable from codemode scripts. Verify with:
+`node_modules` is gitignored; `setup-dev-env.sh` runs `npm i` in the
+directory on every bootstrap and merges the `ddgsearch` entry into
+`~/.pi/agent/mcp.json` if it is not already registered (existing servers are
+never removed). One tool: `duckduckgo_web_search` (query, count 1-20,
+safeSearch), default `codemode` exposure — callable from codemode scripts.
+Verify with:
 
 ```bash
 pi mcp list
@@ -173,8 +178,10 @@ Everything else is upstream. If you customize further, note it here.
 
 ### inline-bash, subagent, dynamic-tools (vendored)
 
-Also vendored from `@earendil-works/pi-coding-agent` examples, same policy as plan-mode:
-symlinked into `~/.pi/agent/extensions/`, source of truth in this repo.
+Also vendored from `@earendil-works/pi-coding-agent` examples, same policy as
+plan-mode: symlinked into `~/.pi/agent/extensions/` (plus
+`~/.pi/agent/agents` and `~/.pi/agent/prompts` for subagent), source of truth
+in this repo. `setup-dev-env.sh` creates all of these links.
 
 ```bash
 UP="$(npm root -g)/@earendil-works/pi-coding-agent/examples/extensions"
@@ -183,11 +190,21 @@ diff -u "$UP/dynamic-tools.ts" pi/extensions/dynamic-tools.ts
 diff -ur "$UP/subagent" pi/extensions/subagent
 ```
 
-Subagent additionally symlinks sample agents (`scout`, `planner`, `reviewer`,
-`worker`) into `~/.pi/agent/agents/` and workflow prompts (`/implement`,
-`/scout-and-plan`, `/implement-and-review`) into `~/.pi/agent/prompts/`.
-It runs user-level agents only by default (`.pi/agents` in untrusted repos is
-ignored). Check `subagent/README.md` for the security model.
+`inline-bash.ts` and `dynamic-tools.ts` are vendored verbatim. `subagent/`
+differs from upstream — its deviations are documented in
+`pi/extensions/subagent/README.md`. In short: the `reviewer` agent enforces a
+`Verdict: CLEAN` / `Verdict: FINDINGS (n)` contract, a local-only
+`reviewer-strong` agent (pinned to `ai-model-router/Claude Opus 5.5`) backs
+the escalation path of the `/implement-and-review` loop, and model pins that
+don't exist on the HF model router were dropped (agents without a pin inherit
+the dispatching session's model).
+
+The bootstrap symlinks the sample agents (`scout`, `planner`, `reviewer`,
+`reviewer-strong`, `worker`) into `~/.pi/agent/agents/` and the workflow
+prompts (`/implement`, `/scout-and-plan`, `/implement-and-review`) into
+`~/.pi/agent/prompts/`. The extension runs user-level agents only by default
+(`.pi/agents` in untrusted repos is ignored). Check `subagent/README.md` for
+the security model.
 
 ### Updating after a pi upgrade
 
@@ -222,10 +239,12 @@ pi --help | grep -- --plan      # proves the extension loaded
 
 ### Verification
 
-After adding an extension, sanity-check it loads:
+After adding an extension, sanity-check it loads (a broken extension fails pi
+startup, and registered extension flags show up in `--help`):
 
 ```bash
-cd $(mktemp -d) && pi --list-commands 2>/dev/null || true
+pi --help | grep -- --plan    # plan-mode registered its flag -> it loaded
+cd $(mktemp -d) && pi -p "Reply with ok"   # headless run, no startup errors
 # then in pi: /add-echo-tool mytest  (dynamic-tools), /reload after edits,
 # and prompt: branch is !{git branch --show-current}   (inline-bash)
 ```

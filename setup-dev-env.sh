@@ -331,10 +331,64 @@ link_config "$REPO_DIR/pi/extensions/background-compaction.ts" \
 # flow calls it, and it is not a built-in tool.
 link_config "$REPO_DIR/pi/extensions/questionnaire.ts" \
             "$HOME/.pi/agent/extensions/questionnaire.ts"
+# inline-bash expands !{command} in prompts before sending (see pi/README.md).
+link_config "$REPO_DIR/pi/extensions/inline-bash.ts" \
+            "$HOME/.pi/agent/extensions/inline-bash.ts"
+# subagent delegates tasks to isolated pi processes. Its sample agents and
+# workflow prompts live in subdirectories and must be linked separately.
+link_config "$REPO_DIR/pi/extensions/subagent" \
+            "$HOME/.pi/agent/extensions/subagent"
+mkdir -p "$HOME/.pi/agent/agents" "$HOME/.pi/agent/prompts"
+for agent_md in "$REPO_DIR"/pi/extensions/subagent/agents/*.md; do
+    link_config "$agent_md" "$HOME/.pi/agent/agents/$(basename "$agent_md")"
+done
+for prompt_md in "$REPO_DIR"/pi/extensions/subagent/prompts/*.md; do
+    link_config "$prompt_md" "$HOME/.pi/agent/prompts/$(basename "$prompt_md")"
+done
+# dynamic-tools.ts, rtk.ts and ask-user.ts stay unlinked: they are templates
+# and optional tools, not part of the default setup (see pi/README.md).
 # keybindings.json moves app.thinking.cycle off Shift+Tab so plan-mode can own
 # Shift+Tab for the plan <-> execute switch (Pi reserves built-in keys).
 link_config "$REPO_DIR/pi/keybindings.json" \
             "$HOME/.pi/agent/keybindings.json"
+
+# The self-hosted ddg-search MCP server (pi/README.md): install its pinned
+# dependencies and register it user-level. npm i is idempotent; the mcp.json
+# merge never removes servers the user added themselves.
+if command -v node >/dev/null 2>&1; then
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "Would run: npm i --prefix $REPO_DIR/pi/mcp/ddg-search"
+    else
+        npm i --prefix "$REPO_DIR/pi/mcp/ddg-search" --no-audit --no-fund >/dev/null 2>&1 \
+            || echo "  WARNING: npm i failed in pi/mcp/ddg-search; ddgsearch will not connect"
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        if [ -f "$HOME/.pi/agent/mcp.json" ] \
+            && grep -q '"ddgsearch"' "$HOME/.pi/agent/mcp.json" 2>/dev/null; then
+            echo "✓ ddgsearch already registered in $HOME/.pi/agent/mcp.json"
+        else
+            echo "Would register ddgsearch in $HOME/.pi/agent/mcp.json -> $REPO_DIR/pi/mcp/ddg-search/server.mjs"
+        fi
+    else
+        node -e '
+        const fs = require("fs");
+        const path = process.argv[1], server = process.argv[2];
+        let cfg = {};
+        if (fs.existsSync(path)) {
+            try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); }
+            catch { console.log("  WARNING: " + path + " is not valid JSON; leaving it untouched"); process.exit(0); }
+        }
+        cfg.mcpServers = cfg.mcpServers || {};
+        if (cfg.mcpServers.ddgsearch) { console.log("\u2713 ddgsearch already registered in " + path); process.exit(0); }
+        cfg.mcpServers.ddgsearch = { command: "node", args: [server] };
+        fs.mkdirSync(require("path").dirname(path), { recursive: true });
+        fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+        console.log("\u2713 Registered ddgsearch in " + path);
+    ' "$HOME/.pi/agent/mcp.json" "$REPO_DIR/pi/mcp/ddg-search/server.mjs"
+    fi
+else
+    echo "  node not found; skipping ddg-search MCP setup"
+fi
 link_config "$REPO_DIR/claude/skills/jarvis-suggest/SKILL.md" \
             "$HOME/.claude/skills/jarvis-suggest/SKILL.md"
 link_config "$REPO_DIR/claude/skills/slack-catchup/SKILL.md" \
