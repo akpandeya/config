@@ -21,12 +21,13 @@ subagent/
 ├── agents/              # Sample agent definitions
 │   ├── scout.md         # Fast recon, returns compressed context
 │   ├── planner.md       # Creates implementation plans
-│   ├── reviewer.md      # Code review
+│   ├── reviewer.md      # Code review (model inherited from dispatching session)
+│   ├── reviewer-strong.md # Deep review pinned to the strongest router model
 │   └── worker.md        # General-purpose (full capabilities)
 └── prompts/             # Workflow presets (prompt templates)
     ├── implement.md     # scout -> planner -> worker
     ├── scout-and-plan.md    # scout -> planner (no implementation)
-    └── implement-and-review.md  # worker -> reviewer -> worker
+    └── implement-and-review.md  # worker ⇄ reviewer loop with user-gated escalation
 ```
 
 ## Installation
@@ -147,12 +148,13 @@ Project agents override user agents with the same name when `agentScope: "both"`
 
 ## Sample Agents
 
-| Agent | Purpose | Model | Tools |
-|-------|---------|-------|-------|
-| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
-| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
-| `worker` | General-purpose | Sonnet | (all default) |
+| Agent | Purpose | Model |
+|-------|---------|-------|
+| `scout` | Fast codebase recon | `ai-model-router/Claude Haiku 5.5` |
+| `planner` | Implementation plans | inherits dispatching session |
+| `reviewer` | Code review (ends with `Verdict: CLEAN` / `Verdict: FINDINGS (n)`) | inherits dispatching session |
+| `reviewer-strong` | Deep review for escalation rounds | `ai-model-router/Claude Opus 5.5` |
+| `worker` | General-purpose | inherits dispatching session |
 
 ## Workflow Prompts
 
@@ -160,7 +162,25 @@ Project agents override user agents with the same name when `agentScope: "both"`
 |--------|------|
 | `/implement <query>` | scout → planner → worker |
 | `/scout-and-plan <query>` | scout → planner |
-| `/implement-and-review <query>` | worker → reviewer → worker |
+| `/implement-and-review <query>` | orchestrator loop: worker ⇄ reviewer until `Verdict: CLEAN`; the orchestrator fixes mechanical findings silently and asks the user (retry / switch reviewer / split task / accept / stop) only when findings survive a round, look systemic, or the round limit is hit |
+
+## Review loop protocol (`/implement-and-review`)
+
+The prompt template turns the main agent into an orchestrator that dispatches
+one `subagent` call per step (never a single chain, so it can decide between
+steps):
+
+1. `worker` implements (or fixes the previous review's feedback).
+2. A reviewer agent reviews and ends with `Verdict: CLEAN` or
+   `Verdict: FINDINGS (n)`.
+3. Mechanical findings are fixed and re-reviewed without interrupting the user.
+   The user is asked (via the questionnaire tool) only when a finding survived a
+   fix round, the task looks like it should be split (a concrete split is
+   proposed), quality issues look systemic (a stronger reviewer is offered), or
+   the 3-round limit is reached.
+
+Reviewers must emit the verdict line; `reviewer.md` and `reviewer-strong.md`
+enforce this in their system prompts.
 
 ## Error Handling
 
