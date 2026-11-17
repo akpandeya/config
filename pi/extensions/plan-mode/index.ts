@@ -263,8 +263,11 @@ After completing each step, call the plan_done tool with that step's number imme
 		if (choice === REVISE) {
 			const refinement = await ctx.ui.editor("What should change in the plan?", "");
 			if (refinement?.trim()) {
+				// Local deviation from upstream: guardrails so the revise turn edits
+				// the plan instead of re-exploring the codebase from scratch.
+				const guarded = `[Plan revision] Apply the feedback below to the existing numbered plan. You already explored the codebase while planning — do NOT re-read files, re-run searches, or re-explore unless the feedback specifically requires verification. Output only the revised full plan in the same "Plan:" numbered format, and keep unchanged steps as-is.\n\nFeedback: ${refinement.trim()}`;
 				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
-				pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
+				pi.sendUserMessage(guarded, { deliverAs: "followUp" });
 			}
 			return;
 		}
@@ -392,6 +395,10 @@ Restrictions:
 - Bash is restricted to an allowlist of read-only commands
 
 Ask clarifying questions when the request is ambiguous.
+
+When the user asks for plan changes, revise the plan text only — do not
+execute it and do not re-explore the codebase unless the change requires
+verification.
 
 Create a detailed numbered plan under a "Plan:" header:
 

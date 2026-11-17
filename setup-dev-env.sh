@@ -321,6 +321,8 @@ link_config "$REPO_DIR/nvim"                   "$HOME/.config/nvim"
 # pi/README.md for the pinned version, local tweaks and update steps.
 link_config "$REPO_DIR/pi/extensions/plan-mode" \
             "$HOME/.pi/agent/extensions/plan-mode"
+link_config "$REPO_DIR/pi/extensions/background-compaction.ts" \
+            "$HOME/.pi/agent/extensions/background-compaction.ts"
 # keybindings.json moves app.thinking.cycle off Shift+Tab so plan-mode can own
 # Shift+Tab for the plan <-> execute switch (Pi reserves built-in keys).
 link_config "$REPO_DIR/pi/keybindings.json" \
