@@ -1290,6 +1290,11 @@ runs skip automatically). It never applies after
 a reviewer has requested changes:
 a re-review always runs then unless the user skips it manually.
 
+Write \`; review: skip\` only when you are actually appending it to the
+Implementer line. Never mention it in prose, parentheses or reasoning on a
+plan that keeps a reviewer — a plan with a Reviewer line is one that gets
+reviewed, full stop. Say why the reviewer is needed instead.
+
 Optionally add one more unnumbered line naming a reviewer and a review budget:
 
 Reviewer: <model id> — <one-line reason>; rounds: <1-5>
