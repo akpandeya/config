@@ -12,7 +12,7 @@
  * Features:
  * - /plan command or Ctrl+Alt+P to toggle
  * - Shift+Tab: plan -> approval dialog -> execute, asked again until approved
- * - Bash restricted to allowlisted read-only commands
+ * - Bash restricted to read-only commands: file reads and read pipelines, psql/hf-sql/hf-photon/hf-df/snow/sqlite3 limited to SELECT-class statements, GET/HEAD-only curl and `gh api` — edits, mutating SQL and data-carrying HTTP stay blocked (see utils.ts isSafeCommand)
  * - Extracts numbered plan steps from "Plan:" sections
  * - [DONE:n] markers to complete steps during execution
  * - Progress widget above the editor during execution: numbered steps, laid out
@@ -491,23 +491,33 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return plannerReviewSkip ? "skip" : suggested.model;
 
 		const starred = !plannerReviewSkip;
-		const modelOptions = ordered.map(
-			(candidate, index) =>
-				`${index === 0 && starred ? "★ " : "  "}${describeRoleModel(candidate)}${
-					index === 0 && starred
+		const modelLabels = uniqueLabels(
+			ordered.map((candidate, index) => {
+				const isSuggested = index === 0;
+				return `${isSuggested && starred ? "★ " : "  "}${describeRoleModel(candidate)}${
+					isSuggested && starred
 						? ` — suggested${plannerSuggested ? ` by plan: ${lastReviewerPick?.reason || "reviewer pick"}` : ""}`
 						: ""
-				}`,
+				}`;
+			}),
+			ordered,
 		);
 		const skipLabel = plannerReviewSkip
 			? "★ ⏭ Skip review — planner suggested (`; review: skip`)"
 			: "  ⏭ Skip review";
-		const options = [skipLabel, ...uniqueLabels(modelOptions, ordered)];
+		// ctx.ui.select has no preselect: the cursor starts on the first option,
+		// so the suggested choice must come first or Enter picks the wrong entry
+		// (observed: cursor parked on "Skip review" while the suggested model was
+		// only starred). Skip leads only when the planner itself suggested it.
+		const options = plannerReviewSkip
+			? [skipLabel, ...modelLabels]
+			: [modelLabels[0]!, skipLabel, ...modelLabels.slice(1)];
 		const choice = await ctx.ui.select("Review with which model?", options);
-		if (choice === skipLabel) return "skip";
-		const model = options.indexOf(choice) > 0 ? ordered[options.indexOf(choice) - 1]?.model : undefined;
 		// Cancel (undefined) keeps the previous behavior: run with the suggested model.
-		return model ?? suggested.model;
+		if (choice === undefined) return suggested.model;
+		if (choice === skipLabel) return "skip";
+		const modelIndex = modelLabels.indexOf(choice);
+		return modelIndex >= 0 ? ordered[modelIndex]?.model : suggested.model;
 	}
 
 	/**
@@ -529,15 +539,20 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		const suggested = suggestedReviewRounds();
 		if (!ctx.hasUI) return suggested;
 		const suffix = lastReviewerPick?.rounds ? " — planner suggested" : " — suggested";
-		const options: string[] = [];
+		// The suggested count goes first: ctx.ui.select starts the cursor on the
+		// first option, and a starred-but-second suggestion is not preselected.
+		const order = [suggested];
 		for (let n = 1; n <= MAX_REVIEW_ROUNDS; n++) {
-			options.push(`${n === suggested ? "★ " : "  "}${n} round${n === 1 ? "" : "s"}${n === suggested ? suffix : ""}`);
+			if (n !== suggested) order.push(n);
 		}
+		const options = order.map(
+			(n) => `${n === suggested ? "★ " : "  "}${n} round${n === 1 ? "" : "s"}${n === suggested ? suffix : ""}`,
+		);
 		const choice = await ctx.ui.select(
 			"How many review rounds before it reports findings instead of fixing?",
 			options,
 		);
-		const picked = choice === undefined ? undefined : Number(choice.match(/^★?\s*(\d+)/)?.[1]);
+		const picked = choice === undefined ? undefined : order[options.indexOf(choice)];
 		return picked && picked >= 1 && picked <= MAX_REVIEW_ROUNDS ? picked : suggested;
 	}
 
@@ -888,13 +903,11 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		if (todoItems.length === 0) return;
 
 		const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
-		const planTodoListMessage = {
-			customType: "plan-todo-list",
-			content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
-			display: true,
-		};
 
-		const choice = await ctx.ui.select(`Approve this plan? (${todoItems.length} steps)`, [APPROVE, REVISE]);
+		// The cursor starts on the first option, so Revise leads: Enter must never
+		// approve the plan by default (observed: an accidental approval while the
+		// user meant to ask for a revision). Approving takes a deliberate move.
+		const choice = await ctx.ui.select(`Approve this plan? (${todoItems.length} steps)`, [REVISE, APPROVE]);
 
 		if (choice === APPROVE) {
 			const firstTodoItem = todoItems[0];
@@ -987,7 +1000,6 @@ Remaining steps:
 ${remainingList}
 
 ${how}`;
-			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
 			pi.sendMessage(
 				{ customType: "plan-mode-execute", content: execMessage, display: true },
 				{ triggerTurn: true, deliverAs: "followUp" },
@@ -1001,8 +1013,17 @@ ${how}`;
 			if (refinement?.trim()) {
 				// Local deviation from upstream: guardrails so the revise turn edits
 				// the plan instead of re-exploring the codebase from scratch.
-				const guarded = `[PLAN REVISION — do NOT execute anything; do NOT run any tools that modify files or state. Present the revised plan and wait for the approval dialog] Apply the feedback below to the existing numbered plan. You already explored the codebase while planning — do NOT re-read files, re-run searches, or re-explore unless the feedback specifically requires verification. Output only the revised full plan in the same "Plan:" numbered format, and keep unchanged steps as-is.\n\nFeedback: ${refinement.trim()}`;
-				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
+				// The current plan is inlined into THIS message. A bare plan-steps
+				// follow-up must never reach the model on its own: the model read
+				// "here are the plan steps" as "plan approved" and started executing
+				// while plan mode was still on (observed live in a gambitflow
+				// session). One message, explicit framing, nothing left to misread.
+				const guarded = `[PLAN REVISION — do NOT execute anything; do NOT run any tools that modify files or state. Present the revised plan and wait for the approval dialog] Apply the feedback below to the existing numbered plan. You already explored the codebase while planning — do NOT re-read files, re-run searches, or re-explore unless the feedback specifically requires verification. Output only the revised full plan in the same "Plan:" numbered format, and keep unchanged steps as-is.
+
+Current plan:
+${todoListText}
+
+Feedback: ${refinement.trim()}`;
 				pi.sendUserMessage(guarded, { deliverAs: "followUp" });
 			}
 			return;

@@ -6,8 +6,15 @@
  * @earendil-works/pi-coding-agent 1.5.2 — see pi/README.md.
  */
 
-// Destructive commands blocked in plan mode
-const DESTRUCTIVE_PATTERNS = [
+import { readFileSync } from "node:fs";
+
+// Destructive commands blocked in plan mode (and during review passes).
+// Checked against every top-level command segment; a match anywhere blocks the
+// whole invocation. Editors and shell redirects are handled separately below
+// (an editor name inside a path segment like ~/code/... must not block every
+// command on machines whose checkout lives under ~/code — observed live), and
+// redirects to /dev/null are harmless reads that the old `>` regex blocked.
+const DESTRUCTIVE_PATTERNS: RegExp[] = [
 	/\brm\b/i,
 	/\brmdir\b/i,
 	/\bmv\b/i,
@@ -22,15 +29,14 @@ const DESTRUCTIVE_PATTERNS = [
 	/\btruncate\b/i,
 	/\bdd\b/i,
 	/\bshred\b/i,
-	/(^|[^<])>(?!>)/,
-	/>>/,
+	/(^|\s)-delete(\s|$)/, // find -delete and friends
 	/\bnpm\s+(install|uninstall|update|ci|link|publish)/i,
 	/\byarn\s+(add|remove|install|publish)/i,
 	/\bpnpm\s+(add|remove|install|publish)/i,
 	/\bpip\s+(install|uninstall)/i,
 	/\bapt(-get)?\s+(install|remove|purge|update|upgrade)/i,
 	/\bbrew\s+(install|uninstall|upgrade)/i,
-	/\bgit\s+(add|commit|push|pull|merge|rebase|reset|checkout|branch\s+-[dD]|stash|cherry-pick|revert|tag|init|clone)/i,
+	/\bgit\s+(add|commit|push|pull|merge|rebase|reset|checkout|branch\s+-[dD]|stash|cherry-pick|revert|tag\s+(?!(-l|--list)(\s|$))|init|clone)/i,
 	/\bsudo\b/i,
 	/\bsu\b/i,
 	/\bkill\b/i,
@@ -40,70 +46,640 @@ const DESTRUCTIVE_PATTERNS = [
 	/\bshutdown\b/i,
 	/\bsystemctl\s+(start|stop|restart|enable|disable)/i,
 	/\bservice\s+\S+\s+(start|stop|restart)/i,
-	/\b(vim?|nano|emacs|code|subl)\b/i,
 ];
 
-// Safe read-only commands allowed in plan mode
-const SAFE_PATTERNS = [
+// Editors only count as the command word of a segment (`code app.ts`), never
+// as a path component (`~/code/personal/gambitflow/...`).
+const EDITOR_COMMAND = /^\s*(?:vim?|vi|nano|emacs|code|subl|zed|hx|helix)\b/;
+
+// Read-only commands allowed in plan mode and review. Every top-level segment
+// (split on ; | && newline, quote-aware) must match one of these, so compound
+// read pipelines (`grep x f | wc -l`, `find ... 2>/dev/null | head -60`) pass
+// while any mutating segment blocks the whole invocation. Deny-by-default:
+// interpreters (`node script.js`, `python -c`, `bash -c`) can write files, so
+// they stay out regardless of the script's intent.
+const READ_PATTERNS: RegExp[] = [
+	// File reading / inspection
 	/^\s*cat\b/,
 	/^\s*head\b/,
 	/^\s*tail\b/,
 	/^\s*less\b/,
 	/^\s*more\b/,
+	/^\s*bat\b/,
+	/^\s*zcat\b/,
+	/^\s*bzcat\b/,
+	/^\s*xzcat\b/,
+	/^\s*sed\s+-n/i,
+	/^\s*awk\b/,
 	/^\s*grep\b/,
+	/^\s*rg\b/,
 	/^\s*find\b/,
+	/^\s*fd\b/,
 	/^\s*ls\b/,
-	/^\s*pwd\b/,
-	/^\s*echo\b/,
-	/^\s*printf\b/,
-	/^\s*wc\b/,
-	/^\s*sort\b/,
-	/^\s*uniq\b/,
-	/^\s*diff\b/,
-	/^\s*file\b/,
+	/^\s*eza\b/,
+	/^\s*tree\b/,
 	/^\s*stat\b/,
+	/^\s*file\b/,
 	/^\s*du\b/,
 	/^\s*df\b/,
-	/^\s*tree\b/,
-	/^\s*which\b/,
-	/^\s*whereis\b/,
-	/^\s*type\b/,
+	/^\s*wc\b/,
+	/^\s*diff\b/,
+	/^\s*cmp\b/,
+	/^\s*pwd\b/,
+	/^\s*cd\b/,
+	/^\s*echo\b/,
+	/^\s*printf\b/,
+	/^\s*man\b/,
+	// Text-processing pipeline stages
+	/^\s*sort\b/,
+	/^\s*uniq\b/,
+	/^\s*cut\b/,
+	/^\s*tr\b/,
+	/^\s*paste\b/,
+	/^\s*comm\b/,
+	/^\s*column\b/,
+	/^\s*nl\b/,
+	/^\s*tac\b/,
+	/^\s*rev\b/,
+	/^\s*fold\b/,
+	/^\s*fmt\b/,
+	/^\s*numfmt\b/,
+	/^\s*expand\b/,
+	/^\s*seq\b/,
+	/^\s*jq\b/,
+	/^(\s*base64)\b/,
+	/^\s*iconv\b/,
+	/^\s*xxd\b/,
+	/^\s*hexdump\b/,
+	/^\s*od\b/,
+	/^\s*strings\b/,
+	/^\s*(md5sum|sha1sum|sha256sum|sha512sum|shasum|cksum|b2sum)\b/,
+	/^\s*(basename|dirname|readlink|realpath)\b/,
+	// Archives: listing only (flag cluster must contain t, not c/x/u/r)
+	/^\s*tar\s+(?=[-a-zA-Z]*t)(?!-[^ ]*[cxurA])\S+/,
+	/^\s*tar\s+--list\b/,
+	/^\s*unzip\s+(-l|-v|-Z)\b/,
+	/^\s*zipinfo\b/,
+	/^\s*gzip\s+-l\b/,
+	// System / environment info
 	/^\s*env\b/,
 	/^\s*printenv\b/,
 	/^\s*uname\b/,
 	/^\s*whoami\b/,
 	/^\s*id\b/,
+	/^\s*groups\b/,
 	/^\s*date\b/,
 	/^\s*cal\b/,
 	/^\s*uptime\b/,
+	/^\s*hostname\b/,
+	/^\s*tty\b/,
 	/^\s*ps\b/,
-	/^\s*top\b/,
-	/^\s*htop\b/,
 	/^\s*free\b/,
-	/^\s*git\s+(status|log|diff|show|branch|remote|config\s+--get)/i,
-	/^\s*git\s+ls-/i,
-	/^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
-	/^\s*yarn\s+(list|info|why|audit)/i,
-	/^\s*node\s+--version/i,
-	/^\s*python\s+--version/i,
-	/^\s*curl\s/i,
-	/^\s*wget\s+-O\s*-/i,
-	// Jira CLI read-only lookups (view/list/board/sprint/comment list).
-	// Positive allowlist: create/edit/move/etc. never match and stay blocked.
+	/^\s*lsof\b/,
+	/^\s*netstat\b/,
+	/^\s*ss\b/,
+	/^\s*iostat\b/,
+	/^\s*vmstat\b/,
+	/^\s*which\b/,
+	/^\s*whereis\b/,
+	/^\s*type\b/,
+	// Network reads (ping needs -c N: bare ping never terminates on macOS)
+	/^\s*ping\s+(-\S+\s+)*-c\s+\d+/,
+	/^\s*dig\b/,
+	/^\s*nslookup\b/,
+	/^\s*host\b/,
+	/^\s*whois\b/,
+	/^\s*wget\s+-O\s*-/,
+	// Version probes
+	/^\s*node\s+(-v|--version)\b/,
+	/^\s*npm\s+(-v|--version)\b/,
+	/^\s*python3?\s+(-V|--version)\b/,
+	/^\s*git\s+(-v|--version)\b/,
+	/^\s*psql\s+(-v|--version)\b/,
+	/^\s*docker\s+(-v|--version)\b/,
+	// Package managers: queries only
+	/^\s*npm\s+(list|ls|view|info|search|outdated|audit)\b/,
+	/^\s*yarn\s+(list|info|why|audit)\b/,
+	/^\s*pip3?\s+(show|list|freeze|index|debug)\b/,
+	/^\s*brew\s+(list|info|search|outdated|deps|uses|options)\b/,
+	/^\s*apt\s+list\b/,
+	/^\s*apt-cache\s+(search|policy|show)\b/,
+	/^\s*dpkg\s+(-l|--list)\b/,
+	// git: read subcommands only. Positional arguments create/move things
+	// (`git branch newname`, `git remote add ...`), so list forms are
+	// flags-only or bare.
+	/^\s*git\s+(status|log|diff|show|blame|grep|shortlog|reflog|rev-parse|ls-files|ls-remote|describe|whatchanged)\b/,
+	/^\s*git\s+branch(\s+-[^\s]+)*\s*$/,
+	/^\s*git\s+remote(\s+-v)?\s*$/,
+	/^\s*git\s+config\s+--(get|list)\b/,
+	/^\s*git\s+worktree\s+list\b/,
+	/^\s*git\s+tag(\s+(-l|--list))?\s*$/,
+	// gh: read subcommands; `gh api` is GET-only via the check below
+	/^\s*gh\s+(pr|issue|run|repo|release|gist|workflow)\s+(view|list|status|checks)\b/,
+	/^\s*gh\s+(pr|issue)\s+comment\s+list\b/,
+	// Jira CLI read-only lookups (create/edit/move/etc. never match)
 	/^\s*jira\s+(view|list|issue\s+view|issue\s+list|board|sprint|comment\s+list)\b/,
-	/^\s*jq\b/,
-	/^\s*sed\s+-n/i,
-	/^\s*awk\b/,
-	/^\s*rg\b/,
-	/^\s*fd\b/,
-	/^\s*bat\b/,
-	/^\s*eza\b/,
+	// Containers: reads only (exec/run/cp stay blocked)
+	/^\s*docker\s+(ps|images|image\s+ls|logs|inspect|version|history|top|stats\s+--no-stream)\b/,
+	/^\s*docker\s+compose\s+(ps|logs|config|top|images|port|version)\b/,
+	// kubectl reads
+	/^\s*kubectl\s+(get|describe|logs|version|config\s+(view|current-context)|cluster-info)\b/,
+	// Cron / macOS system reads
+	/^\s*crontab\s+-l\b/,
+	/^\s*launchctl\s+list\b/,
+	/^\s*defaults\s+read\b/,
+	// xargs restricted to known read-only targets — bare xargs would let
+	// `xargs bash -c ...` smuggle an arbitrary command past the segment check.
+	/^\s*xargs\s+(?:(?:-0|-n\s+\d+|-I\s*\S+|--no-run-if-empty)\s+)*(cat|grep|ls|head|tail|wc|file|stat|du|basename|dirname|echo|printf|md5sum|sha256sum)\b/,
 ];
 
+/** True when the segment's shell-level redirects all discard output
+ * (`>/dev/null`, `2>&1`, `&>/dev/null`) or read input (`< file`, heredocs).
+ * Any redirect into a real file is a mutation. Quote- and depth-aware so
+ * `grep "a>b" file` and `awk '{print > "f"}'` are judged on the shell level
+ * (the awk script's own redirect is a known accepted gap, as before). */
+function hasMutatingRedirect(segment: string): boolean {
+	let quote: string | undefined;
+	let depth = 0;
+	let i = 0;
+	while (i < segment.length) {
+		const ch = segment[i]!;
+		if (quote) {
+			if (quote === '"' && ch === "\\") {
+				i += 2;
+				continue;
+			}
+			if (ch === quote) quote = undefined;
+			i++;
+			continue;
+		}
+		if (ch === "'") {
+			quote = ch;
+			i++;
+			continue;
+		}
+		if (ch === '"') {
+			quote = ch;
+			i++;
+			continue;
+		}
+		if (ch === "\\") {
+			i += 2;
+			continue;
+		}
+		if (ch === "(") {
+			depth++;
+			i++;
+			continue;
+		}
+		if (ch === ")" && depth > 0) {
+			depth--;
+			i++;
+			continue;
+		}
+		if (ch === "<") {
+			// Input redirect / heredoc / herestring / fd dup: reads, not writes.
+			i++;
+			continue;
+		}
+		if (ch === ">") {
+			let j = i + 1;
+			if (segment[j] === ">") j++; // >>
+			if (segment[j] === "&" && /\d/.test(segment[j + 1] ?? "")) {
+				i = j + 2; // >&1 fd dup
+				continue;
+			}
+			while (j < segment.length && /\s/.test(segment[j]!)) j++;
+			let target = "";
+			while (j < segment.length && !/\s/.test(segment[j]!)) {
+				target += segment[j]!;
+				j++;
+			}
+			target = target.replace(/^"|"$/g, "").replace(/^'|'$/g, "");
+			if (target !== "/dev/null") return true;
+			i = j;
+			continue;
+		}
+		if (ch === "&" && segment[i + 1] === ">") {
+			// &> / &>> — resolve like > with the same /dev/null carve-out.
+			let j = i + 2;
+			if (segment[j] === ">") j++;
+			while (j < segment.length && /\s/.test(segment[j]!)) j++;
+			let target = "";
+			while (j < segment.length && !/\s/.test(segment[j]!)) {
+				target += segment[j]!;
+				j++;
+			}
+			target = target.replace(/^"|"$/g, "").replace(/^'|'$/g, "");
+			if (target !== "/dev/null") return true;
+			i = j;
+			continue;
+		}
+		i++;
+	}
+	return false;
+}
+
+/** Split a command into top-level segments on ; | && |& and newlines,
+ * ignoring separators inside quotes, backticks and $(...) substitutions. */
+export function splitCommandSegments(command: string): string[] {
+	const segments: string[] = [];
+	let current = "";
+	let quote: string | undefined;
+	let depth = 0;
+	const push = () => {
+		segments.push(current);
+		current = "";
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i]!;
+		if (quote) {
+			current += ch;
+			if (quote === '"' && ch === "\\") {
+				current += command[++i] ?? "";
+			} else if (ch === quote) {
+				quote = undefined;
+			}
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			current += ch;
+			continue;
+		}
+		if (ch === "\\") {
+			current += ch + (command[++i] ?? "");
+			continue;
+		}
+		if (ch === "(") depth++;
+		if (ch === ")" && depth > 0) depth--;
+		if (depth === 0 && (ch === ";" || ch === "\n")) {
+			push();
+			continue;
+		}
+		if (depth === 0 && ch === "|") {
+			if (command[i + 1] === "|" || command[i + 1] === "&") i++;
+			push();
+			continue;
+		}
+		if (depth === 0 && ch === "&" && command[i + 1] === "&") {
+			push();
+			i++;
+			continue;
+		}
+		current += ch;
+	}
+	push();
+	return segments;
+}
+
+/** Quote-aware whitespace tokenizer for flag/argument inspection. */
+function tokenizeArgs(segment: string): string[] {
+	const tokens: string[] = [];
+	let token = "";
+	let hasToken = false;
+	let quote: string | undefined;
+	const flush = () => {
+		if (hasToken) tokens.push(token);
+		token = "";
+		hasToken = false;
+	};
+	for (let i = 0; i < segment.length; i++) {
+		const ch = segment[i]!;
+		if (quote === "'") {
+			if (ch === "'") quote = undefined;
+			else token += ch;
+			continue;
+		}
+		if (quote === '"') {
+			if (ch === '"') quote = undefined;
+			else if (ch === "\\" && ['"', "\\", "$", "`"].includes(segment[i + 1] ?? "")) token += segment[++i]!;
+			else token += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			hasToken = true;
+			continue;
+		}
+		if (ch === "\\") {
+			token += segment[++i] ?? "";
+			hasToken = true;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			flush();
+			continue;
+		}
+		token += ch;
+		hasToken = true;
+	}
+	flush();
+	return tokens;
+}
+
+/** SQL statements allowed in plan mode: every ;-separated statement must
+ * start with a read keyword (psql backslash meta-commands limited to the
+ * \\d family and \\l), and no mutating keyword may appear anywhere. */
+const DENY_SQL_PATTERN =
+	/\b(insert|update|delete|drop|alter|truncate|create|replace|grant|revoke|copy|merge|call|perform|do|set|reset|begin|commit|rollback|abort|savepoint|release|prepare|execute|deallocate|vacuum|analyze|reindex|cluster|comment|lock|listen|notify|load|refresh|reassign|discard|setval|set_config|nextval|pg_sleep|for\s+update|for\s+share|for\s+no\s+key)\b/i;
+
+export function isReadOnlySql(sql: string): boolean {
+	// Strip comments first so a keyword inside one cannot skew the parse.
+	const text = sql.replace(/--[^\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+	// sqlite dot-commands (.output, .mode ...) can write; nothing is allowed.
+	if (/^\s*\.\w/m.test(text)) return false;
+	for (const statement of text.split(";")) {
+		const trimmed = statement.trim();
+		if (!trimmed) continue;
+		// psql meta-commands: only the read-only \d family and \l.
+		if (trimmed.startsWith("\\")) {
+			if (!/^\\(?:d[a-z]*|l)\b/.test(trimmed)) return false;
+			continue;
+		}
+		if (!/^(select|with|explain|show|describe|desc|table|values)\b/i.test(trimmed)) {
+			if (!/^pragma\s+(table_|index_)/i.test(trimmed)) return false;
+		}
+		if (DENY_SQL_PATTERN.test(trimmed)) return false;
+	}
+	return true;
+}
+
+interface SqlToolConfig {
+	match: RegExp;
+	/** Flags whose value is inline SQL. */
+	sqlFlags: string[];
+	/** Flags whose value is a SQL file path. */
+	fileFlags: string[];
+	/** Other flags that consume the following token (ignored). */
+	valueFlags: string[];
+	/** What bare positional arguments mean. */
+	positionals: "none" | "sql" | "file" | "dbfile-then-sql";
+}
+
+const SQL_TOOLS: SqlToolConfig[] = [
+	{
+		match: /^\s*psql\b/,
+		sqlFlags: ["-c", "--command"],
+		fileFlags: ["-f", "--file"],
+		valueFlags: ["-h", "--host", "-p", "--port", "-U", "--username", "-d", "--dbname", "-v", "--set", "--variable"],
+		positionals: "none",
+	},
+	{
+		// snow sql: -c is the CONNECTION, -q the query.
+		match: /^\s*snow\s+sql\b/,
+		sqlFlags: ["-q", "--query"],
+		fileFlags: ["-f", "--file"],
+		valueFlags: ["-c", "--connection", "--account", "--warehouse", "--database", "--schema", "--role", "--username"],
+		positionals: "none",
+	},
+	{
+		// hf-sql <relpath> runs a saved query file from the workbench checkout.
+		match: /^\s*hf-sql\b/,
+		sqlFlags: [],
+		fileFlags: [],
+		valueFlags: [],
+		positionals: "file",
+	},
+	{
+		match: /^\s*hf-photon\b/,
+		sqlFlags: ["-q", "-e", "-c"],
+		fileFlags: ["-f", "--file"],
+		valueFlags: [],
+		positionals: "sql",
+	},
+	{
+		match: /^\s*hf-df\b/,
+		sqlFlags: ["-q", "-e"],
+		fileFlags: ["-f", "--file"],
+		valueFlags: ["--backend"],
+		positionals: "sql",
+	},
+	{
+		match: /^\s*sqlite3\b/,
+		sqlFlags: [],
+		fileFlags: [],
+		valueFlags: ["-cmd", "-init"],
+		positionals: "dbfile-then-sql",
+	},
+];
+
+function readSqlFile(path: string): string | undefined {
+	const root = process.env.HF_WORKBENCH_ROOT;
+	const candidates = path.startsWith("/")
+		? [path]
+		: [
+				...(root ? [`${root}/${path}`, `${root}/sql/${path}`] : []),
+				`${process.cwd()}/${path}`,
+			];
+	for (const candidate of candidates) {
+		try {
+			return readFileSync(candidate, "utf8");
+		} catch {
+			// Try the next location; an unreadable file stays blocked.
+		}
+	}
+	return undefined;
+}
+
+function sqlPayloadsAreReadOnly(config: SqlToolConfig, segment: string): boolean {
+	const tokens = tokenizeArgs(segment);
+	const payloads: string[] = [];
+	const files: string[] = [];
+	const positionals: string[] = [];
+	const groups: Array<{ flags: string[]; sink: (value: string) => void }> = [
+		{ flags: config.sqlFlags, sink: (value) => payloads.push(value) },
+		{ flags: config.fileFlags, sink: (value) => files.push(value) },
+		{ flags: config.valueFlags, sink: () => {} },
+	];
+	for (let i = 1; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		if (token.startsWith("-")) {
+			const flag = groups.flatMap(({ flags }) => flags).find((f) => token === f || token.startsWith(`${f}=`));
+			if (flag !== undefined) {
+				const group = groups.find(({ flags }) => flags.includes(flag))!;
+				if (token.includes("=")) group.sink(token.slice(flag.length + 1));
+				else {
+					const value = tokens[++i];
+					if (value === undefined) return false;
+					group.sink(value);
+				}
+			}
+			// Unknown flags are treated as boolean; a following value token then
+			// lands in positionals and fails the SQL check (deny-safe).
+			continue;
+		}
+		positionals.push(token);
+	}
+	// psql -o / snow sql -o redirect query output into a file — a write.
+	if (tokens.slice(1).some((t) => t === "-o" || t === "--output")) return false;
+	switch (config.positionals) {
+		case "sql":
+			payloads.push(...positionals);
+			break;
+		case "file":
+			files.push(...positionals);
+			break;
+		case "dbfile-then-sql":
+			if (positionals.length >= 2) payloads.push(positionals[1]!);
+			break;
+		case "none":
+			break;
+	}
+	if (payloads.length === 0 && files.length === 0) return false;
+	return (
+		payloads.every(isReadOnlySql) &&
+		files.every((file) => {
+			const content = readSqlFile(file);
+			return content !== undefined && isReadOnlySql(content);
+		})
+	);
+}
+
+const CURL_WRITE_FLAGS = new Set([
+	"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii",
+	"--json", "-F", "--form", "--form-string", "-T", "--upload-file",
+	"-o", "--output", "-O", "--remote-name", "--remote-name-all", "-J", "--remote-header-name",
+	"-c", "--cookie-jar", "-D", "--dump-header", "-K", "--config", "--create-dirs",
+]);
+
+function httpMethodIsRead(method: string | undefined): boolean {
+	return method === undefined || /^(GET|HEAD)$/i.test(method);
+}
+
+/** curl is read-only when it sends GET/HEAD and writes nothing anywhere. */
+function curlIsReadOnly(segment: string): boolean {
+	const tokens = tokenizeArgs(segment);
+	for (let i = 1; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		if (CURL_WRITE_FLAGS.has(token)) return false;
+		if (token.includes("=") && CURL_WRITE_FLAGS.has(token.slice(0, token.indexOf("=")))) return false;
+		if (token === "-X" || token === "--request") {
+			if (!httpMethodIsRead(tokens[++i])) return false;
+		} else if (/^-[X][A-Za-z]/.test(token)) {
+			if (!httpMethodIsRead(token.slice(2))) return false;
+		} else if (token.startsWith("--request=")) {
+			if (!httpMethodIsRead(token.slice("--request=".length))) return false;
+		} else if (/^-[A-Za-z]*[dFT]/.test(token)) {
+			// Combined short flags smuggle a data/form/upload flag (-sd, -sSd, ...).
+			return false;
+		}
+	}
+	return true;
+}
+
+/** gh api defaults to GET; -f/-F/--field force POST and --input posts a file. */
+function ghApiIsReadOnly(segment: string): boolean {
+	const tokens = tokenizeArgs(segment);
+	for (let i = 1; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		if (["-f", "-F", "--field", "--raw-field", "--input"].includes(token)) return false;
+		if (token === "-x" || token === "-X" || token === "--method") {
+			if (!httpMethodIsRead(tokens[++i])) return false;
+		}
+	}
+	return true;
+}
+
+/** Tool-specific read checks. undefined = no special handling, fall through
+ * to READ_PATTERNS. */
+function specialReadCheck(segment: string): boolean | undefined {
+	if (/^\s*yq\b/.test(segment)) return !/(^|\s)(-i|--inplace)\b/.test(segment);
+	if (/^\s*curl\b/.test(segment)) return curlIsReadOnly(segment);
+	if (/^\s*gh\s+api\b/.test(segment)) return ghApiIsReadOnly(segment);
+	for (const config of SQL_TOOLS) {
+		if (config.match.test(segment)) return sqlPayloadsAreReadOnly(config, segment);
+	}
+	return undefined;
+}
+
+/** Command substitution and process substitution contents run as commands in
+ * their own right, so they get the same segment checks (recursively) instead
+ * of hiding behind the outer command's read pattern (`echo $(node -e ...)`). */
+function substitutionInners(segment: string): string[] {
+	const inners: string[] = [];
+	let quote: string | undefined;
+	let i = 0;
+	while (i < segment.length) {
+		const ch = segment[i]!;
+		if (quote) {
+			if (quote === '"' && ch === "\\") i += 2;
+			else {
+				if (ch === quote) quote = undefined;
+				i++;
+			}
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			i++;
+			continue;
+		}
+		if (ch === "\\") {
+			i += 2;
+			continue;
+		}
+		const opener =
+			(ch === "$" && segment[i + 1] === "(") ||
+			((ch === "<" || ch === ">") && segment[i + 1] === "(") ||
+			(ch === "`");
+		if (!opener) {
+			i++;
+			continue;
+		}
+		const start = ch === "`" ? i + 1 : i + 2;
+		let depth = 1;
+		let j = start;
+		let innerQuote: string | undefined;
+		while (j < segment.length) {
+			const c = segment[j]!;
+			if (innerQuote) {
+				if (c === innerQuote) innerQuote = undefined;
+			} else if (c === "'" || c === '"') {
+				innerQuote = c;
+			} else if (c === "(") {
+				depth++;
+			} else if (c === ")") {
+				depth--;
+				if (depth === 0) break;
+			} else if (c === "`" && ch === "`") {
+				break;
+			}
+			j++;
+		}
+		if (j < segment.length || ch === "`") {
+			inners.push(segment.slice(start, ch === "`" ? j : j));
+			i = j + 1;
+		} else {
+			i = start;
+		}
+	}
+	return inners;
+}
+
+function segmentPasses(segment: string): boolean {
+	if (EDITOR_COMMAND.test(segment)) return false;
+	if (DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(segment))) return false;
+	if (hasMutatingRedirect(segment)) return false;
+	const special = specialReadCheck(segment);
+	if (special !== undefined) return special;
+	return READ_PATTERNS.some((pattern) => pattern.test(segment));
+}
+
+/** Read-only gate for plan mode and review passes: every top-level segment
+ * must be a read (deny-by-default), every redirect must discard output, and
+ * command/process substitutions must themselves pass the same checks. */
 export function isSafeCommand(command: string): boolean {
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(command));
-	const isSafe = SAFE_PATTERNS.some((p) => p.test(command));
-	return !isDestructive && isSafe;
+	const segments = splitCommandSegments(command).map((s) => s.trim());
+	if (segments.every((s) => s === "")) return false;
+	for (const segment of segments) {
+		if (!segment) continue;
+		if (!segmentPasses(segment)) return false;
+		for (const inner of substitutionInners(segment)) {
+			if (!isSafeCommand(inner)) return false;
+		}
+	}
+	return true;
 }
 
 export interface TodoItem {

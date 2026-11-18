@@ -78,10 +78,13 @@ Local deviations from upstream:
   answers led to a plan in the same run falls through to the normal approval
   flow (extraction runs before the gate), and the footer is refreshed via
   `updateStatus` whenever the flag clears, so `⏳` never goes stale.
-- Approval dialog has two options (`Approve — implement now` / `Revise
-  plan…`); upstream's third option `Keep planning` was a no-op fallthrough
-  identical to dismissing the dialog, so it was removed — Esc means keep
-  planning.
+- Approval dialog has two options (`Revise plan…` / `Approve — implement now`,
+  in that order): upstream's third option `Keep planning` was a no-op
+  fallthrough identical to dismissing the dialog, so it was removed — Esc means
+  keep planning. Revise leads because `ctx.ui.select` starts the cursor on the
+  first option, so Enter must never approve by default; the reviewer and
+  review-round pickers apply the same rule, putting the suggested model / round
+  count first (a starred-but-second suggestion is not preselected).
 - **Revision-approval guard**: the injected "Revise plan…" prefix is
   `[PLAN REVISION — do NOT execute anything; do NOT run any tools that modify
   files or state. Present the revised plan and wait for the approval dialog]`,
@@ -90,6 +93,27 @@ Local deviations from upstream:
   "implement") starts execution. Before this, an agent occasionally treated
   the echoed revision message (or a restated plan) as approval and started
   executing while still in plan mode, getting every write command blocked.
+- **Revision messages carry the plan**: the revise path sends ONE user message
+  — the guarded prefix plus the current numbered plan inlined — and never a
+  bare plan-steps follow-up. The `plan-todo-list` message sent alongside the
+  revision reached the model alone as a turn trigger and was read as
+  "plan approved — implementing now" (observed in a gambitflow session,
+  2026-11-18); the execute path folds the remaining steps into its own message
+  the same way.
+- **Read-only gate, not just a blocklist** (`utils.ts`): `isSafeCommand`
+  checks every top-level segment (quote-aware split on `;` `|` `&&` newlines)
+  against a read-only allowlist, resolves redirects itself (anything into a
+  real file is a mutation; `/dev/null` and `2>&1` are fine), matches editor
+  names only as a command word (so a checkout under `~/code/...` is not
+  "running VS Code" — that bug blocked every plan-mode bash probe on this
+  machine), recurses into `$()`/`<()`/backtick substitutions, and adds
+  read-only tool support: `psql`/`snow sql`/`sqlite3` and the workbench's
+  `hf-sql`/`hf-photon`/`hf-df` limited to SELECT-class statements (inline or
+  via `-f`/saved-query files), plus GET/HEAD-only `curl` and `gh api`. Deny
+  list closes known holes (`find -delete`, `gh api -f` = POST, `psql -o`,
+  `sed -i`, `yq -i`, `xargs bash -c` via restricted xargs targets). Interpreters
+  (`node script.js`, `python -c`, `bash -c`) stay blocked — a denylist cannot
+  prove what a script would do. Tests: `node utils.test.ts`.
 - **Subagent-backed review and implementer**: when the `subagent` extension is
   loaded, the deep-review pass is dispatched to the read-only `reviewer` agent
   as an isolated subagent (fresh context — the reviewer no longer re-reads the
