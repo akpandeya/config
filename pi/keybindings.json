@@ -1,4 +1,9 @@
 {
   "$schema": "https://pi.dev/schemas/keybindings.schema.json",
-  "app.thinking.cycle": "alt+t"
+  "app.thinking.cycle": "alt+t",
+  "app.session.new": "ctrl+shift+n",
+  "app.session.resume": "ctrl+shift+r",
+  "app.session.tree": "ctrl+shift+t",
+  "tui.altScreen.halfPageUp": "alt+u",
+  "tui.altScreen.halfPageDown": "alt+d"
 }
