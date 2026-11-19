@@ -95,9 +95,27 @@ interface PlanModeState {
 	reviewRoundLimit?: number;
 	/** "Skip review" was chosen in the approval-time review dialog. */
 	reviewSkipUpfront?: boolean;
+	/** Publish ladder chosen at approval time: what happens once the review is clean. */
+	publishPolicy?: PublishPolicy;
 	toolsBeforeReview?: string[];
 	mutated?: boolean;
 }
+
+/**
+ * What may happen after the review loop ends clean — decided at approval time so
+ * execution and the post-review publish steps run without further dialogs.
+ */
+type PublishPolicy = "hold" | "pr" | "pr-auto" | "pr-deploy";
+
+/** Approval-time publish ladder, safest first: the picker's cursor starts on the
+ * first option, so Enter keeps the local-only default and publishing always
+ * takes a deliberate move (same rule as the approval dialog itself). */
+const PUBLISH_POLICIES: readonly { value: PublishPolicy; label: string; summary: string }[] = [
+	{ value: "hold", label: "Hold", summary: "stop after review — local commit only, publish nothing" },
+	{ value: "pr", label: "PR only", summary: "push + open PR (draft in work repos), human merges" },
+	{ value: "pr-auto", label: "PR + auto-merge", summary: "merge when review is clean and CI is green; personal repos only" },
+	{ value: "pr-deploy", label: "PR + merge + deploy", summary: "as auto-merge, then the repo's documented deploy step" },
+];
 
 /** Default review rounds before the extension stops asking for fixes and reports instead. */
 const DEFAULT_REVIEW_ROUNDS = 2;
@@ -156,6 +174,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	// without further dialogs.
 	let reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
 	let reviewSkipUpfront = false;
+	// Publish ladder, decided in the approval-time dialog next to the review pickers:
+	// what may happen after the review finishes clean, without asking again mid-run.
+	let publishPolicy: PublishPolicy = "hold";
 	let toolsBeforeReview: string[] | undefined;
 	// Set by tool results during execution: a plan that never mutated anything
 	// skips the review pass.
@@ -556,6 +577,33 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		return picked && picked >= 1 && picked <= MAX_REVIEW_ROUNDS ? picked : suggested;
 	}
 
+	/** Publish ladder, asked right after the review-rounds picker so a clean review
+	 * needs no further dialogs. Dismissal falls back to hold: publishing must never
+	 * be the accidental default. */
+	async function choosePublishPolicy(ctx: ExtensionContext): Promise<PublishPolicy> {
+		if (!ctx.hasUI) return "hold";
+		const options = PUBLISH_POLICIES.map((p) => `${p.label} — ${p.summary}`);
+		const choice = await ctx.ui.select("After the review is clean, publish how?", options);
+		const picked = choice === undefined ? undefined : PUBLISH_POLICIES[options.indexOf(choice)];
+		return picked?.value ?? "hold";
+	}
+
+	/** Execution-prompt paragraph for the chosen policy. Work repos always degrade
+	 * to PR-only: the standing rule that work PRs stay for human merge outranks the
+	 * approval-time answer. */
+	function publishPolicyPrompt(policy: PublishPolicy): string {
+		switch (policy) {
+			case "hold":
+				return `Publish policy — HOLD: when the review is clean, stop. Leave the work as a local commit on its branch and report what was done and verified. Do not push, open a PR, or merge.`;
+			case "pr":
+				return `Publish policy — PR ONLY: when the review is clean, commit (repo's commit conventions), push the branch, and open a PR — as a draft in work repos. Then stop and report the PR link; do not merge.`;
+			case "pr-auto":
+				return `Publish policy — PR + AUTO-MERGE: when the review is clean, commit, push, and open a PR. Merge it only when CI is green (if the repo has CI) AND the repo's rules allow agent merges — work repos with human-merge or branch-protection rules degrade to PR only: open the PR (draft) and stop. Report the PR link either way.`;
+			case "pr-deploy":
+				return `Publish policy — PR + MERGE + DEPLOY: as PR + auto-merge (merge only when CI is green and the repo's rules allow agent merges; otherwise open the PR and stop). After a successful merge, run the repo's documented deploy step if the repo's instruction files define one; if none is defined, say so and stop. Never deploy with an ad-hoc command.`;
+		}
+	}
+
 	async function skipReview(ctx: ExtensionContext, why: string): Promise<void> {
 		pi.sendMessage(
 			{
@@ -583,6 +631,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		reviewRound = 0;
 		reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
 		reviewSkipUpfront = false;
+		publishPolicy = "hold";
 		mutatedThisExecution = false;
 		todoItems = [];
 		lastImplementerPick = undefined;
@@ -763,6 +812,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 			reviewRound,
 			reviewRoundLimit,
 			reviewSkipUpfront,
+			publishPolicy,
 			toolsBeforeReview,
 			mutated: mutatedThisExecution,
 		});
@@ -787,6 +837,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 		reviewRound = 0;
 		reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
 		reviewSkipUpfront = false;
+		publishPolicy = "hold";
 		plannerModel = undefined;
 		implementerIsolated = false;
 
@@ -820,6 +871,7 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 			reviewRound = 0;
 			reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
 			reviewSkipUpfront = false;
+			publishPolicy = "hold";
 			plannerModel = undefined;
 		} else if (plannerModel) {
 			// Re-entering plan mode from execution: plan revisions belong to the
@@ -969,11 +1021,10 @@ When changes are needed, follow the verdict with a bullet list of concrete findi
 				reviewerModel = undefined;
 			}
 			reviewRoundLimit = await chooseReviewRounds(ctx);
+			publishPolicy = await choosePublishPolicy(ctx);
 			persistState();
 			ctx.ui.notify(
-				reviewerModel
-					? `Reviewer: ${modelKey(reviewerModel)} · up to ${reviewRoundLimit} review round(s).`
-					: `Review skipped · up to ${reviewRoundLimit} review round(s).`,
+				`${reviewerModel ? `Reviewer: ${modelKey(reviewerModel)} · up to ${reviewRoundLimit} review round(s)` : `Review skipped · up to ${reviewRoundLimit} review round(s)`} · publish: ${publishPolicy}.`,
 				"info",
 			);
 
@@ -991,9 +1042,13 @@ For each remaining step, in order:
 3. If the worker did not complete the step, re-dispatch once with the failure context; if it
    fails again, stop and report — never mark a failed step done.
 
-After the last step, summarize what was implemented.`
+After the last step, summarize what was implemented.
+
+${publishPolicyPrompt(publishPolicy)}`
 				: `Start with: ${firstTodoItem.text}
-After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.`;
+After completing each step, call the plan_done tool with that step's number immediately (e.g. {"steps":[1]}), and also include a [DONE:n] tag in your text as a backup.
+
+${publishPolicyPrompt(publishPolicy)}`;
 			const execMessage = `Execute the plan.
 
 Remaining steps:
@@ -1107,6 +1162,7 @@ Feedback: ${refinement.trim()}`;
 				plannerReviewSkip = false;
 				reviewRoundLimit = DEFAULT_REVIEW_ROUNDS;
 				reviewSkipUpfront = false;
+				publishPolicy = "hold";
 				restoreNormalModeTools();
 				await restoreOrchestrator(ctx);
 				updateStatus(ctx);
@@ -1383,7 +1439,10 @@ After completing each step, call the plan_done tool with that step's number imme
 Remaining steps:
 ${todoList}
 
-${how}`,
+${how}
+
+After the review loop finishes clean, the approval-time publish policy applies:
+${publishPolicyPrompt(publishPolicy)}`,
 					display: false,
 				},
 			};
@@ -1516,6 +1575,7 @@ ${how}`,
 			reviewRound = planModeEntry.data.reviewRound ?? reviewRound;
 			reviewRoundLimit = planModeEntry.data.reviewRoundLimit ?? DEFAULT_REVIEW_ROUNDS;
 			reviewSkipUpfront = planModeEntry.data.reviewSkipUpfront ?? reviewSkipUpfront;
+			publishPolicy = planModeEntry.data.publishPolicy ?? "hold";
 			toolsBeforeReview = planModeEntry.data.toolsBeforeReview ?? toolsBeforeReview;
 			mutatedThisExecution = planModeEntry.data.mutated ?? mutatedThisExecution;
 		}
