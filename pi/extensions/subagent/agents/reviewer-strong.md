@@ -1,6 +1,6 @@
 ---
 name: reviewer-strong
-description: Deep code review on the strongest available model; use when a normal review round stays dirty or findings look systemic
+description: Deep code review with an escalated, more thorough prompt; use when a normal review round stays dirty or findings look systemic. The model is whatever the dispatch sets via an explicit per-dispatch override (or inherits from the caller) — never assumed to be the strongest available
 tools: read, grep, find, ls, bash
 bashAllowlist: true
 ---

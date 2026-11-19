@@ -13,16 +13,24 @@
  *   propose "compact now?" with a timeout. Declining is remembered until the
  *   next summary; the run is never interrupted mid-turn.
  * - session_before_compact (manual/threshold): if the cached summary's cut
- *   point is still valid, return it so compaction completes instantly.
- *   Overflow recovery falls through to default compaction.
+ *   point is still valid and fresh, return it so compaction completes
+ *   instantly. Overflow recovery falls through to default compaction.
  * - Invalidation: /tree, /fork, session switch, compaction completion/failure,
- *   or the cut point no longer being on the branch.
+ *   the cut point no longer being on the branch, or the summary going stale
+ *   (context grew by more than KEEP_RECENT_TOKENS since it was computed).
  *
  * Validity trick: the cut keeps the last KEEP_MARGIN tokens (60k) rather than
- * Pi's keepRecentTokens (20k). Since the context only grows, Pi's later cut is
- * always at-or-after this cut, so the cached summary always covers a superset
- * of what Pi would summarize — redundant but correct, and it stays reusable as
- * new messages arrive.
+ * Pi's keepRecentTokens (KEEP_RECENT_TOKENS below, 50k — matching settings.json
+ * compaction.keepRecentTokens). Since the context only grows, Pi's later cut
+ * is always at-or-after this cut, so the cached summary always covers a
+ * superset of what Pi would summarize — redundant but correct, and it stays
+ * reusable as new messages arrive.
+ *
+ * Freshness: computedAtTokens records where the summary was computed. If the
+ * context has grown by more than KEEP_RECENT_TOKENS since then, reusing the
+ * cached cut would keep everything since it verbatim — at ~1M tokens a summary
+ * cut at ~200k frees almost nothing and invites repeated compactions — so the
+ * cache is invalidated and pi's default compaction runs instead.
  *
  * Summary model: opencode-go/glm-5.3-flash (cheap, fast). Fallback: active model.
  */
@@ -33,6 +41,7 @@ import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-a
 
 const PRECOMPUTE_THRESHOLD = 200_000; // tokens; start background summarization here
 const KEEP_MARGIN = 60_000; // tokens kept verbatim below the cut (>= Pi's keepRecentTokens)
+export const KEEP_RECENT_TOKENS = 50_000; // matches settings.json compaction.keepRecentTokens
 const SUMMARY_MODEL_PROVIDER = "opencode-go";
 const SUMMARY_MODEL_ID = "glm-5.3-flash";
 const PROPOSAL_TIMEOUT_MS = 30_000;
@@ -41,6 +50,17 @@ interface CachedSummary {
 	summary: string;
 	firstKeptEntryId: string;
 	computedAtTokens: number;
+}
+
+/**
+ * A cached summary is only reusable while the context has grown by at most
+ * KEEP_RECENT_TOKENS since it was computed: the cut keeps everything after
+ * firstKeptEntryId verbatim, so reusing a summary computed N tokens ago keeps
+ * those N tokens plus the margin — beyond Pi's own keepRecentTokens margin
+ * the compaction frees almost nothing. Exported for tests.
+ */
+export function isCacheFresh(computedAtTokens: number, currentTokens: number): boolean {
+	return currentTokens - computedAtTokens <= KEEP_RECENT_TOKENS;
 }
 
 export default function backgroundCompactionExtension(pi: ExtensionAPI): void {
@@ -110,6 +130,13 @@ export default function backgroundCompactionExtension(pi: ExtensionAPI): void {
 	async function precompute(ctx: ExtensionContext): Promise<void> {
 		const controller = new AbortController();
 		inflight = controller;
+		// Capture the context size at cut-computation time, BEFORE any await: the
+		// summarization request below is fire-and-forget and later turns keep
+		// growing the context while it runs. Stamping the post-summary usage would
+		// mark a cut made at ~200k as computed at ~900k and wrongly pass the
+		// freshness check. A missing reading maps to 0, which makes the cache
+		// maximally stale (conservative: default compaction wins).
+		const computedAtTokens = ctx.getContextUsage()?.tokens ?? 0;
 		setStatus(ctx, "⏳ pre-compaction summary…");
 		try {
 			const cut = computeCut(ctx);
@@ -176,7 +203,7 @@ ${conversationText}
 			cache = {
 				summary,
 				firstKeptEntryId: cut.firstKeptEntryId,
-				computedAtTokens: ctx.getContextUsage()?.tokens ?? 0,
+				computedAtTokens,
 			};
 			setStatus(ctx, "✓ pre-compaction summary ready");
 		} catch (error) {
@@ -209,6 +236,12 @@ ${conversationText}
 	pi.on("agent_end", async (_event, ctx) => {
 		const tokens = ctx.getContextUsage()?.tokens;
 		if (!cache || tokens == null || tokens < PRECOMPUTE_THRESHOLD) return;
+		// Stale summary: don't propose compacting with it; a fresh one is
+		// computed on the next turn_end.
+		if (!isCacheFresh(cache.computedAtTokens, tokens)) {
+			invalidate();
+			return;
+		}
 		if (proposedFor === cache.firstKeptEntryId) return;
 		proposedFor = cache.firstKeptEntryId;
 		if (!ctx.hasUI) return;
@@ -238,6 +271,15 @@ ${conversationText}
 			return;
 		}
 		if (!cache || !cutStillOnBranch(ctx)) return;
+		// Stale summary: the cut would keep everything since it was computed
+		// verbatim — invalidate and fall through to pi's default compaction.
+		// Current tokens fall back to the event's canonical tokensBefore so a
+		// null live reading can never bypass the freshness guard.
+		const tokens = ctx.getContextUsage()?.tokens ?? preparation.tokensBefore;
+		if (!isCacheFresh(cache.computedAtTokens, tokens)) {
+			invalidate();
+			return;
+		}
 
 		const result = {
 			compaction: {
