@@ -32,9 +32,28 @@ Only Critical findings block. Warnings and Suggestions never do.
 
 - Default first-round reviewer: `reviewer` (inherits this session's model).
 - Reviewer-capable agents installed user-level: `reviewer` and
-  `reviewer-strong` (pinned to the strongest model on the HF model router).
+  `reviewer-strong`. Neither is pinned to a model — both inherit the
+  dispatching session's model unless the dispatch passes an explicit
+  `model` override. `reviewer-strong` differs by prompt (deeper, more
+  skeptical review), not by model.
 - When offering the user a reviewer choice, list the actually-available
   reviewer agents and their models — never invent agent names.
+
+## Escalating to `reviewer-strong`
+
+When the loop calls for a stronger reviewer (systemic findings, or the user
+picks "Switch reviewer" and chooses `reviewer-strong`), the agent file alone
+does not buy a stronger model — it re-runs whichever model the session uses,
+just with a deeper review prompt. To actually escalate, dispatch it WITH an
+explicit per-dispatch `model` override:
+
+- Pick the override from the models actually available on this machine
+  (check the session's available models; do not assume a fixed provider/id),
+  choosing a stronger / more expensive tier than the model that just
+  reviewed — e.g. the priciest available reasoning model.
+- Example: `subagent { agent: "reviewer-strong", model: "<provider>/<modelId>", task: "..." }`.
+- Only fall back to a plain dispatch (inheriting the session model) if no
+  stronger model exists on this machine; say so in the final report.
 
 ## Decision policy after a non-clean review
 

@@ -22,7 +22,7 @@ subagent/
 │   ├── scout.md         # Fast recon, returns compressed context
 │   ├── planner.md       # Creates implementation plans
 │   ├── reviewer.md      # Code review (model inherited from dispatching session)
-│   ├── reviewer-strong.md # Deep review pinned to the strongest router model
+│   ├── reviewer-strong.md # Deep review escalation (stronger prompt; model via per-dispatch override)
 │   └── worker.md        # General-purpose (full capabilities)
 └── prompts/             # Workflow presets (prompt templates)
     ├── implement.md     # scout -> planner -> worker
@@ -155,10 +155,10 @@ Project agents override user agents with the same name when `agentScope: "both"`
 
 | Agent | Purpose | Model |
 |-------|---------|-------|
-| `scout` | Fast codebase recon | `ai-model-router/Claude Haiku 5.5` |
+| `scout` | Fast codebase recon | inherits dispatching session; plan-mode picks a fast model per phase, or pass a per-dispatch `model` override |
 | `planner` | Implementation plans | inherits dispatching session |
 | `reviewer` | Code review (ends with `Verdict: CLEAN` / `Verdict: FINDINGS (n)`) | inherits dispatching session |
-| `reviewer-strong` | Deep review for escalation rounds | `ai-model-router/Claude Opus 5.5` |
+| `reviewer-strong` | Deep review for escalation rounds | inherits dispatching session; pass an explicit per-dispatch `model` override to actually escalate |
 | `worker` | General-purpose | inherits dispatching session |
 
 ## Workflow Prompts
@@ -186,6 +186,12 @@ steps):
 
 Reviewers must emit the verdict line; `reviewer.md` and `reviewer-strong.md`
 enforce this in their system prompts.
+
+Note: `reviewer-strong` is a prompt escalation only — it carries no model pin
+and inherits the dispatching session's model like any other agent. To actually
+review on a stronger model, dispatch it with an explicit per-dispatch `model`
+override (see "Per-dispatch model override" above); without one it re-runs the
+same model with a deeper prompt.
 
 ## Error Handling
 

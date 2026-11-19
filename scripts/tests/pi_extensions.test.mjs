@@ -456,3 +456,214 @@ test("revision override: the last Reviewer line wins (handler clears when none i
 test("no Reviewer line at all returns undefined", () => {
 	assert.equal(planUtils.extractReviewerPick(["Plan:\n1. Step"]), undefined);
 });
+
+// --- background-compaction cache freshness (isCacheFresh) ---
+
+/**
+ * Regression context: computedAtTokens was recorded but never read, so a
+ * summary computed at ~200k tokens could be reused when the context was near
+ * 1M — the cut keeps everything after it verbatim, freeing almost nothing and
+ * inviting repeated compactions.
+ */
+const bg = await jiti.import(path.join(ROOT, "pi/extensions/background-compaction.ts"), {
+	named: ["isCacheFresh", "KEEP_RECENT_TOKENS"],
+});
+
+test("stale cache: computed at 200k, compaction near 1M is invalidated", () => {
+	assert.equal(bg.isCacheFresh(200_000, 1_000_000), false);
+});
+
+test("fresh cache: computed at 200k, compaction at 240k is still reused", () => {
+	assert.equal(bg.isCacheFresh(200_000, 240_000), true);
+});
+
+test("freshness boundary: exactly KEEP_RECENT_TOKENS growth is fresh, one token more is stale", () => {
+	assert.equal(bg.KEEP_RECENT_TOKENS, 50_000, "must match settings.json compaction.keepRecentTokens");
+	assert.equal(bg.isCacheFresh(200_000, 250_000), true);
+	assert.equal(bg.isCacheFresh(200_000, 250_001), false);
+});
+
+test("KEEP_RECENT_TOKENS matches the live settings.json keepRecentTokens", () => {
+	// Machine-validation, not a portable unit test: on a machine without the
+	// default agent dir (custom PI_CODING_AGENT_DIR, CI scratch home) there is
+	// nothing to compare, so skip instead of failing.
+	const settingsPath = path.join(process.env.HOME, ".pi", "agent", "settings.json");
+	if (!fs.existsSync(settingsPath)) return;
+	const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+	assert.equal(settings.compaction.keepRecentTokens, bg.KEEP_RECENT_TOKENS);
+});
+
+test("freshness is monotone in currentTokens", () => {
+	assert.ok(bg.isCacheFresh(200_000, 200_000), "unchanged context stays fresh");
+	assert.ok(!bg.isCacheFresh(200_000, 900_000), "large growth is stale");
+	assert.ok(bg.isCacheFresh(900_000, 900_000), "late-computed cache is fresh");
+});
+
+/* ------------------------------------------------------------------ */
+/* background-compaction: handler-level tests                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The pure isCacheFresh predicate alone cannot catch the two criticals that
+ * shipped: computedAtTokens being captured AFTER the async summarization
+ * completed (Finding: a cut made at 200k stamped 900k), and the freshness
+ * guard failing open when getContextUsage() returns null. These tests invoke
+ * the REAL extension handlers against a stub ExtensionContext, driving the
+ * summarization promise manually so context growth between the cut and the
+ * summary arrival is simulated exactly as it happens in production.
+ */
+
+async function loadBgExtension() {
+	const mod = await jiti.import(path.join(ROOT, "pi/extensions/background-compaction.ts"), { default: true });
+	const handlers = {};
+	mod({
+		on(event, h) {
+			handlers[event] = h;
+		},
+	});
+	return handlers;
+}
+
+/**
+ * Context with a cut point: e1's 250k-char text estimates to ~62.5k tokens
+ * (tokensOf: ~4 chars/token), covering KEEP_MARGIN (60k) when walking
+ * backwards, so firstKeptEntryId snaps to user message e1 and e0 is summarized.
+ */
+const BG_ENTRIES = [
+	{ id: "e0", type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 } },
+	{ id: "e1", type: "message", message: { role: "user", content: [{ type: "text", text: "x".repeat(250_000) }], timestamp: 2 } },
+	{ id: "e2", type: "message", message: { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 3 } },
+	{ id: "e3", type: "message", message: { role: "user", content: [{ type: "text", text: "next" }], timestamp: 4 } },
+];
+
+/** Stub the slice of ExtensionContext the handlers touch. usage is mutable. */
+function makeBgCtx() {
+	const state = { usageTokens: 200_000, statuses: [] };
+	let resolveComplete;
+	const ctx = {
+		state,
+		get resolveComplete() {
+			return resolveComplete;
+		},
+		model: { provider: "p", id: "m" },
+		modelRegistry: {
+			find: () => ({ provider: "p", id: "m" }),
+			complete: () =>
+				new Promise((resolve) => {
+					resolveComplete = resolve;
+				}),
+		},
+		sessionManager: {
+			buildContextEntries: () => BG_ENTRIES,
+			getBranch: () => BG_ENTRIES,
+		},
+		getContextUsage: () => ({ tokens: state.usageTokens }),
+		hasUI: false,
+		ui: {
+			setStatus: (_key, text) => state.statuses.push(text),
+			theme: { fg: (_style, text) => text },
+		},
+	};
+	return ctx;
+}
+
+async function waitUntil(fn, ms = 2_000) {
+	const start = Date.now();
+	while (!(await fn())) {
+		if (Date.now() - start > ms) throw new Error("waitUntil timed out");
+		await new Promise((r) => setTimeout(r, 5));
+	}
+}
+
+/** Start precompute via turn_end and resolve the summarization manually. */
+async function precomputeWithGrowth(handlers, ctx, tokensDuringSummarization) {
+	await handlers.turn_end({ outcome: "completed" }, ctx); // fires void precompute(ctx)
+	assert.equal(typeof ctx.resolveComplete, "function", "summarization request is inflight");
+	// The context keeps growing while the fire-and-forget summarization runs.
+	ctx.state.usageTokens = tokensDuringSummarization;
+	ctx.resolveComplete({ content: [{ type: "text", text: "summary text" }] });
+	await waitUntil(() => ctx.state.statuses.includes("✓ pre-compaction summary ready"));
+}
+
+/** Distinguishing, non-default values: 200_000 cut vs 300_000 current vs 50_000 window. */
+test("deferred summary: cut at 200k, summary arrives after context grew past 250k → cache is stale (baseline is CUT-TIME tokens)", async () => {
+	const handlers = await loadBgExtension();
+	const ctx = makeBgCtx();
+	// Regression: computedAtTokens used to be read from ctx AFTER the request
+	// completed, stamping 300_000 and making this cache wrongly reusable.
+	await precomputeWithGrowth(handlers, ctx, 300_000);
+	const result = await handlers.session_before_compact(
+		{ reason: "manual", preparation: { tokensBefore: 300_000 } },
+		ctx,
+	);
+	assert.equal(result, undefined, "300k - 200k > KEEP_RECENT_TOKENS: must fall through to default compaction");
+
+	// The stale rejection must have CLEARED the cache: with the context back at
+	// 200k a still-cached summary would now be fresh and reusable — returning
+	// undefined here proves invalidate() ran, not just the staleness branch.
+	ctx.state.usageTokens = 200_000;
+	assert.equal(
+		await handlers.session_before_compact({ reason: "manual", preparation: { tokensBefore: 200_000 } }, ctx),
+		undefined,
+		"cache must be gone after the stale rejection",
+	);
+});
+
+test("deferred summary within the freshness window: cut at 200k, summary at 240k → cached summary is reused", async () => {
+	const handlers = await loadBgExtension();
+	const ctx = makeBgCtx();
+	await precomputeWithGrowth(handlers, ctx, 240_000);
+	const result = await handlers.session_before_compact(
+		{ reason: "threshold", preparation: { tokensBefore: 240_000 } },
+		ctx,
+	);
+	assert.ok(result?.compaction, "fresh cache must be reused");
+	assert.equal(result.compaction.summary, "summary text");
+	assert.equal(result.compaction.firstKeptEntryId, "e1", "cut is the snapped user-message boundary");
+	assert.equal(result.compaction.tokensBefore, 240_000, "event's canonical tokensBefore is forwarded");
+	// Cache is consumed: a second compaction must not reuse it again.
+	assert.equal(
+		await handlers.session_before_compact({ reason: "manual", preparation: { tokensBefore: 240_000 } }, ctx),
+		undefined,
+	);
+});
+
+test("session_before_compact: null context usage falls back to preparation.tokensBefore and still guards (no fail-open)", async () => {
+	const handlers = await loadBgExtension();
+	const ctx = makeBgCtx();
+	await precomputeWithGrowth(handlers, ctx, 200_000); // summary ready while context unchanged
+	// Regression: a null live reading used to skip the freshness check entirely.
+	// tokensBefore says 900k → stale → default compaction + cache cleared.
+	ctx.getContextUsage = () => ({ tokens: null });
+	assert.equal(
+		await handlers.session_before_compact({ reason: "manual", preparation: { tokensBefore: 900_000 } }, ctx),
+		undefined,
+		"null usage must not bypass the freshness guard",
+	);
+	// Same scenario with a FRESH tokensBefore: the fallback must reuse, proving
+	// the fallback value (not just absence of usage) drives the decision.
+	const ctx2 = makeBgCtx();
+	const handlers2 = await loadBgExtension();
+	await precomputeWithGrowth(handlers2, ctx2, 240_000);
+	ctx2.getContextUsage = () => undefined;
+	const result = await handlers2.session_before_compact(
+		{ reason: "manual", preparation: { tokensBefore: 240_000 } },
+		ctx2,
+	);
+	assert.ok(result?.compaction, "fresh tokensBefore fallback must reuse the cache");
+});
+
+test("session_before_compact: overflow recovery never reuses the cache, even a fresh one", async () => {
+	const handlers = await loadBgExtension();
+	const ctx = makeBgCtx();
+	await precomputeWithGrowth(handlers, ctx, 200_000);
+	assert.equal(
+		await handlers.session_before_compact({ reason: "overflow", preparation: { tokensBefore: 200_000 } }, ctx),
+		undefined,
+	);
+	// Invalidated: with usage back in the fresh window nothing is returned.
+	assert.equal(
+		await handlers.session_before_compact({ reason: "manual", preparation: { tokensBefore: 200_000 } }, ctx),
+		undefined,
+	);
+});

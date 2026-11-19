@@ -15,10 +15,13 @@ up changes in a running session).
 | `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
 | `inline-bash.ts` | *linked*. Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
 | `subagent/` | *linked*. Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
+| `background-compaction.ts` | *linked*. Pre-computes a compaction summary in the background once context crosses a threshold (default 200k tokens), so the actual compaction can complete instantly when a fresh cached summary is available; proposes "compact now?" between turns and caches the summary for reuse (invalidated when the context outgrew it) |
+| `compaction-overrides.ts` | *linked*. On session start, syncs `compaction.modelOverrides` with the machine's own `models.json`: every 1M-class model (contextWindow ≥ 900k, compact-at ≥ ~150k) gets `reserveTokens: 750000`. pi's override keys are exact `provider/modelId` strings, and pi-setup generates models.json per machine — this keeps the behavior working where hand-listed keys don't port. Only writes when something changed; takes effect from the next session start |
 | `dynamic-tools.ts` | *linked*. Runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
 | `rtk.ts` | *linked*. Rewrites bash commands through the `rtk` CLI for token savings; needs `rtk` >= 0.23 in PATH (`brew-packages.txt` installs it). No-ops when `rtk` is missing |
 | `ask-user.ts` | *linked*. `ask_user` tool: Claude Code-style multi-question dialog with options, multi-select and free-text "Other" |
-| `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Single override: `app.thinking.cycle` moves to `Alt+T`, freeing `Shift+Tab` for plan-mode |
+| `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Six overrides: `app.thinking.cycle` → `Alt+T` (freeing `Shift+Tab` for plan-mode), `app.session.new` → `Ctrl+Shift+N`, `app.session.resume` → `Ctrl+Shift+R`, `app.session.tree` → `Ctrl+Shift+T`, `tui.altScreen.halfPageUp` → `Alt+U`, `tui.altScreen.halfPageDown` → `Alt+D` |
+| `themes/matrix-dark.json` | Linked to `~/.pi/agent/themes/matrix-dark.json`; `settings.json`'s theme setting selects it |
 | `mcp/ddg-search/` | Local DuckDuckGo web-search MCP server (see below) |
 
 ### mcp/ddg-search
@@ -267,6 +270,14 @@ Local deviations from upstream:
   `Fast`) and compacts it with the same 750k reserve as the other router
   models. Edit `role-models.ts` to change the menus, order, notes, or thinking
   levels; prices are read from the catalog when the dialog opens.
+
+  Settings notes: `compaction.modelOverrides` keys are exact, case-sensitive
+  `provider/modelId` strings — pi does no fuzzy matching there, unlike the
+  role-model menus above. That is why the `compaction-overrides` extension
+  syncs the overrides from each machine's own `models.json` instead of
+  hardcoding router ids. Relatedly, `npm:@hellofresh/pi-setup` is
+  intentionally left floating (unpinned) in the install list so internal
+  fixes arrive automatically on the next bootstrap.
 
 Everything else is upstream. If you customize further, note it here.
 

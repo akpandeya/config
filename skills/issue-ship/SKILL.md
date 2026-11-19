@@ -3,14 +3,14 @@ name: issue-ship
 description: >-
   Implement one GitHub issue end to end on a fresh branch: an implementer writes the change, a
   reviewer checks it, a fixer applies findings, up to two fix rounds with a final review, then
-  commit and, when the user opted in up front, push, PR and merge. Harness and model per stage
-  are asked up front, or passed as arguments for unattended runs (--headless).
+  commit and, per the publish policy chosen up front, push, PR, merge and deploy. Harness and
+  model per stage are asked up front, or passed as arguments for unattended runs (--headless).
   Usage: /issue-ship [<owner/repo> <issue-number>]
-  [IMPLEMENT=<h:m> REVIEW=<h:m> FIX=<h:m> SHIP=yes|no]
+  [IMPLEMENT=<h:m> REVIEW=<h:m> FIX=<h:m> PUBLISH=hold|pr|pr-auto|pr-deploy]
   [--headless] [--fallback=<h:m>] [--escalate=<h:m>] [--on-findings=stop|merge-with-followup]
   [--brief <file>]
 allowed-tools: Bash, Read, Write, Agent, AskUserQuestion
-argument-hint: "[<owner/repo> <issue-number>] [IMPLEMENT=<h:m> REVIEW=<h:m> FIX=<h:m> SHIP=yes|no] [--headless] [--fallback=<h:m>] [--escalate=<h:m>] [--on-findings=stop|merge-with-followup] [--brief <file>]"
+argument-hint: "[<owner/repo> <issue-number>] [IMPLEMENT=<h:m> REVIEW=<h:m> FIX=<h:m> PUBLISH=hold|pr|pr-auto|pr-deploy] [--headless] [--fallback=<h:m>] [--escalate=<h:m>] [--on-findings=stop|merge-with-followup] [--brief <file>]"
 ---
 
 One issue, one branch, one PR. Use `epic-run` for decomposed epics with several tasks. This skill
@@ -43,9 +43,10 @@ gathers context, runs checks and reads log tails. It never pastes whole logs int
 All flags below are optional. With none of them, the skill behaves exactly as before:
 interactive, asks the batch, runs harness calls in the background.
 
-- `IMPLEMENT=<harness>:<model> REVIEW=<h:m> FIX=<h:m> SHIP=yes|no` pre-answer the
-  upfront batch; ask only for answers that are missing. `SHIP=yes` is the explicit
-  ship opt-in; without it, never ship.
+- `IMPLEMENT=<harness>:<model> REVIEW=<h:m> FIX=<h:m> PUBLISH=hold|pr|pr-auto|pr-deploy` pre-answer
+  the upfront batch; ask only for answers that are missing. `PUBLISH` (the publish policy, see
+  step 8) is the explicit publish opt-in; without it the policy defaults to `hold` and nothing
+  leaves the machine. Legacy `SHIP=yes`/`SHIP=no` are accepted and map to `pr-auto`/`hold`.
 - `--headless`: nobody can answer questions. Requires all four batch answers via
   arguments — if any is missing, stop and name it. Never call the dialog tool. Run
   every harness call and the verify command in the **foreground**: this session may be
@@ -75,7 +76,8 @@ interactive, asks the batch, runs harness calls in the background.
  "branch": "<branch>", "notes": "<at most 5 lines: rounds, escalation, decisions, failure reason>"}
 ```
 
-`CLEAN` = review clean, not shipped. `STOPPED` = findings left with
+`CLEAN` = review clean, not published. `PR_OPEN` = published per a `pr` policy (or a
+work-repo `pr-auto` degraded to `pr`): PR open, not merged. `STOPPED` = findings left with
 `--on-findings=stop`, or verify red after escalation. An orchestrator parses this
 file; keep the keys exact.
 
@@ -94,7 +96,7 @@ with context, and copy the body to `$SCRATCH/<issue>/issue.md`.
 
 ## 2. Upfront question batch (the only asks)
 
-Skip whatever the arguments already answered (`IMPLEMENT=`, `REVIEW=`, `FIX=`, `SHIP=`);
+Skip whatever the arguments already answered (`IMPLEMENT=`, `REVIEW=`, `FIX=`, `PUBLISH=`);
 under `--headless`, skip this step entirely — all four answers must have come from
 arguments. Ask everything remaining now, before any stage runs. Do not ask again mid-run.
 Two dialog calls, back to back with no other work between them — `ask_user` (pi) /
@@ -109,9 +111,17 @@ Ask with the dialog tool. Options come from step 1. Offer the last choice as the
 - `FIX`: applies one round of findings
 
 Options are the harnesses that returned models in step 1 (`pi`, `claude`, `opencode`, `agy`). Use the
-fourth question for **Ship after CLEAN?** — push the branch, open a PR and merge once review is
-clean. Yes/no, default no. A later request to ship must be explicit; a `CLEAN` verdict alone is
-never authorization.
+fourth question for the **Publish policy** — what happens after the review is `CLEAN` — with
+exactly these options, safest first, default `hold`:
+
+- `hold` — stop after the review with a local commit; publish nothing (the old "no").
+- `pr` — push the branch and open a PR (draft in work repos), then stop; a human merges.
+- `pr-auto` — PR, then merge only when the gates pass: review `CLEAN`, verify green, CI green
+  if the repo has CI. Personal repos only: in work repos this degrades to `pr`.
+- `pr-deploy` — as `pr-auto`, then run the repo's documented deploy step after the merge; if the
+  repo defines none, say so and stop.
+
+A later request to publish must be explicit; a `CLEAN` verdict alone is never authorization.
 
 **Second call — model per stage**, using each stage's harness picked in the first call. One
 question per stage, options only from that harness's lines in the step 1 output. The dialog
@@ -200,24 +210,32 @@ line that matches the model actually running this orchestration, and do not add 
 trailer or claude.ai session link. Follow the repo's commit style — derive it from recent
 `git log` entries or the repo's CONTRIBUTING, do not guess.
 
-## 8. Ship (only if opted in up front)
+## 8. Publish (per the publish policy)
 
-Only when the user answered yes to "Ship after CLEAN?" in the upfront batch (`SHIP=yes` on
-the command line is that answer), when `--on-findings=merge-with-followup` covers the
-known-issues path, or when the user explicitly asks afterwards. A review verdict of `CLEAN`
-alone is not authorization.
+Run only what the policy chosen in the upfront batch (or the `PUBLISH=` argument) allows. A
+review verdict of `CLEAN` alone is not authorization; `--on-findings=merge-with-followup` was
+explicitly chosen and ships regardless of the policy.
 
-- Push the branch.
-- Open the PR with `pr-create`. The body starts with `Closes #<n>`, summarizes the change and
-  verification, and ends with the Generated-with line only.
-- Merge with `pr-merge <pr-number>`. Relay its output. If it refuses, check the repo scope first.
+- `hold` — skip this step; report with status `CLEAN`.
+- `pr` — push the branch, open the PR with `pr-create` (draft in work repos), and stop with
+  status `PR_OPEN`. Do not merge.
+- `pr-auto` — push and open the PR as for `pr`, then merge with `pr-merge <pr-number>` and relay
+  its output — but only when every gate passes: review `CLEAN`, verify green, and CI green if
+  the repo has CI. In work repos (branch protection, human-merge rules, squad/tribe labels),
+  degrade to `pr`: open the PR as a draft and stop. If it refuses, check the repo scope first.
+- `pr-deploy` — as `pr-auto`, then after a successful merge run the repo's documented deploy
+  step — the command must come from the repo's instruction files or CI config, never invented.
+  If the repo defines no deploy step, say so and stop.
+
+In every shipped case the PR body starts with `Closes #<n>`, summarizes the change and
+verification, and ends with the Generated-with line only.
 
 ## 9. Report
 
 Write `summary.md` in the scratch dir: the stages with harness and model, finding counts per
 round, what each fix changed, and any stop. Write `$SCRATCH/<issue>/result.json` per the
 result contract in step 0.5 and print its path. Then give the user a short report: the PR
-link (if shipped), what was verified, and what was not done.
+link (if published), what was verified, and what was not done.
 
 Release the repo lock: `~/.config/agent-context/scripts/repo-lock.sh release <repo-path> <token>`.
 

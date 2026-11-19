@@ -327,6 +327,11 @@ link_config "$REPO_DIR/pi/extensions/plan-mode" \
             "$HOME/.pi/agent/extensions/plan-mode"
 link_config "$REPO_DIR/pi/extensions/background-compaction.ts" \
             "$HOME/.pi/agent/extensions/background-compaction.ts"
+# compaction-overrides keeps compaction.modelOverrides in sync with the
+# machine's own models.json (1M-context models get reserveTokens 750000) so
+# the hand-listed overrides port to machines with different provider ids.
+link_config "$REPO_DIR/pi/extensions/compaction-overrides.ts" \
+            "$HOME/.pi/agent/extensions/compaction-overrides.ts"
 # questionnaire is vendored from the pi examples too: plan-mode's clarify-first
 # flow calls it, and it is not a built-in tool.
 link_config "$REPO_DIR/pi/extensions/questionnaire.ts" \
@@ -364,6 +369,9 @@ link_config "$REPO_DIR/pi/extensions/ask-user.ts" \
 # Shift+Tab for the plan <-> execute switch (Pi reserves built-in keys).
 link_config "$REPO_DIR/pi/keybindings.json" \
             "$HOME/.pi/agent/keybindings.json"
+# Theme file; settings.json's theme setting selects matrix-dark.
+link_config "$REPO_DIR/pi/themes/matrix-dark.json" \
+            "$HOME/.pi/agent/themes/matrix-dark.json"
 
 # The self-hosted ddg-search MCP server (pi/README.md): install its pinned
 # dependencies and register it user-level. npm i is idempotent; the mcp.json
