@@ -31,6 +31,10 @@ Every line in a memory file must be something the user said themselves:
 
 ## Calibration
 
+- Machine- and session-specific context is not an identity fact. Record it only
+  with an explicit scope marker ("recorded on <machine>, <date>") and never let
+  it shape responses on other devices.
+
 - A one-off mention is not recorded; record when it recurs or the user
   elaborates. Stable facts (job, address, relationships, ongoing projects) are
   recorded on first mention.
