@@ -1,3 +1,18 @@
+# 1Password CLI
+
+- Use the `op` CLI only when explicitly asked to fetch or use a secret, and
+  expect the user to authenticate each time (biometric prompt). Never run `op`
+  in the background or in batch loops.
+- Never print secret values into the conversation, files, or logs. Prefer
+  injecting secrets without displaying them:
+  - `op run -- <cmd>` (resolves `op://` refs into the command's env), or
+  - `op read "op://..." | <consume directly>` (pipe, don't echo), or
+  - pass `op://` references and let the consuming tool resolve them.
+- After any `op` use, do not echo, summarize, or commit the resolved value.
+  Refer to it by its `op://` reference instead.
+- If a secret value ever appears in tool output anyway, tell the user
+  immediately so they can decide whether to rotate it.
+
 # Command output
 
 Command output here is condensed to save tokens, keeping every signal and
