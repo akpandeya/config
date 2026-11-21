@@ -598,9 +598,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			case "pr":
 				return `Publish policy — PR ONLY: when the review is clean, commit (repo's commit conventions), push the branch, and open a PR — as a draft in work repos. Then stop and report the PR link; do not merge.`;
 			case "pr-auto":
-				return `Publish policy — PR + AUTO-MERGE: when the review is clean, commit, push, and open a PR. Merge it only when CI is green (if the repo has CI) AND the repo's rules allow agent merges — work repos with human-merge or branch-protection rules degrade to PR only: open the PR (draft) and stop. Report the PR link either way.`;
+				return `Publish policy — PR + AUTO-MERGE: when the review is clean, commit, push, and open a PR. Merge it only when CI is green (if the repo has CI) AND the repo's rules allow agent merges. If CI is still pending, watch it (e.g. gh pr checks --watch) for up to 60 minutes — the repo's instruction files may set a different window; never merge on pending or red. Window expired or CI red → leave the PR open and report. Work repos with human-merge or branch-protection rules degrade to PR only: open the PR (draft) and stop. Report the PR link either way.`;
 			case "pr-deploy":
-				return `Publish policy — PR + MERGE + DEPLOY: as PR + auto-merge (merge only when CI is green and the repo's rules allow agent merges; otherwise open the PR and stop). After a successful merge, run the repo's documented deploy step if the repo's instruction files define one; if none is defined, say so and stop. Never deploy with an ad-hoc command.`;
+				return `Publish policy — PR + MERGE + DEPLOY: as PR + auto-merge (merge only when CI is green and the repo's rules allow agent merges; pending CI is watched for up to 60 minutes, never merged on pending or red — otherwise open the PR and stop). After a successful merge, run the repo's documented deploy step if the repo's instruction files define one; if none is defined, say so and stop. Never deploy with an ad-hoc command.`;
 		}
 	}
 

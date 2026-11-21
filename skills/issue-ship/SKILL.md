@@ -221,8 +221,12 @@ explicitly chosen and ships regardless of the policy.
   status `PR_OPEN`. Do not merge.
 - `pr-auto` — push and open the PR as for `pr`, then merge with `pr-merge <pr-number>` and relay
   its output — but only when every gate passes: review `CLEAN`, verify green, and CI green if
-  the repo has CI. In work repos (branch protection, human-merge rules, squad/tribe labels),
-  degrade to `pr`: open the PR as a draft and stop. If it refuses, check the repo scope first.
+  the repo has CI. If CI is still pending, watch it in-session (`gh pr checks <n> --watch
+  --interval 30`) for up to **60 minutes** (the repo's instruction files may set a different
+  window). Never merge on pending or red: window expired with CI unfinished, or CI red → leave
+  the PR open, report with status `PR_OPEN` and the reason in `notes`. In work repos (branch
+  protection, human-merge rules, squad/tribe labels), degrade to `pr`: open the PR as a draft
+  and stop. If it refuses, check the repo scope first.
 - `pr-deploy` — as `pr-auto`, then after a successful merge run the repo's documented deploy
   step — the command must come from the repo's instruction files or CI config, never invented.
   If the repo defines no deploy step, say so and stop.

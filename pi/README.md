@@ -11,7 +11,7 @@ up changes in a running session).
 
 | Extension | What it does |
 |---|---|
-| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking, a multi-column progress widget (`/todos`), role-based models (planner picker → implementer + reviewer + review-round pickers → auto review loop → orchestrator restore, all decided at approval time so execution and review run without further dialogs) and a review loop that sends findings back to the implementer |
+| `plan-mode/` | Read-only plan phase (`/plan`, `Ctrl+Alt+P`, `--plan`, `Shift+Tab`): clarify-first questions when the request is ambiguous, then presents the plan and asks **Approve / Revise** (Esc = keep planning) until you approve, then executes with `plan_done` step tracking, a multi-column progress widget (`/todos`), role-based models (planner picker → implementer + reviewer + review-round pickers → publish-policy picker → auto review loop → orchestrator restore, all decided at approval time so execution, review and the post-review publish steps run without further dialogs) and a review loop that sends findings back to the implementer |
 | `questionnaire.ts` | `questionnaire` tool: asks the user one or more option-based questions (single-question list, or tabbed wizard for multiple). Vendored verbatim; plan-mode's clarify phase calls it |
 | `inline-bash.ts` | *linked*. Expands `!{command}` in prompts before sending: `What's in !{pwd}?`, `branch: !{git branch --show-current}`. Whole-line `!cmd` behavior preserved. 30s timeout per command |
 | `subagent/` | *linked*. Delegate tasks to specialized subagents in isolated pi processes: single, parallel (max 8 tasks / 4 concurrent), or chained via `{previous}`. Agents + workflow prompts live in `subagent/agents/` and `subagent/prompts/`, symlinked into `~/.pi/agent/agents` and `~/.pi/agent/prompts` |
@@ -85,9 +85,20 @@ Local deviations from upstream:
   in that order): upstream's third option `Keep planning` was a no-op
   fallthrough identical to dismissing the dialog, so it was removed — Esc means
   keep planning. Revise leads because `ctx.ui.select` starts the cursor on the
-  first option, so Enter must never approve by default; the reviewer and
-  review-round pickers apply the same rule, putting the suggested model / round
-  count first (a starred-but-second suggestion is not preselected).
+  first option, so Enter must never approve by default; the reviewer,
+  review-round, and publish-policy pickers apply the same rule, putting the
+  suggested model / round count first (a starred-but-second suggestion is not
+  preselected) and `Hold` first on the publish ladder.
+- **Publish-policy ladder** (local-only): a fourth approval-time picker asks
+  what may happen after the review finishes clean — `Hold` (local commit only,
+  the default), `PR only` (push + PR, human merges; draft in work repos),
+  `PR + auto-merge` (merge when review clean + CI green; pending CI is watched
+  for up to 60 minutes, overridable per repo; never merged on pending or red;
+  personal repos only — work repos degrade to PR only per the standing
+  human-merge rule), or `PR + merge + deploy` (then the repo's documented
+  deploy step, if it defines one). The chosen policy is persisted with the
+  plan state, injected into the execution prompt, and re-stated in the
+  per-turn execution context.
 - **Revision-approval guard**: the injected "Revise plan…" prefix is
   `[PLAN REVISION — do NOT execute anything; do NOT run any tools that modify
   files or state. Present the revised plan and wait for the approval dialog]`,
