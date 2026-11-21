@@ -145,3 +145,6 @@ nvim/lazy-lock.json
 /pi/mcp/*/node_modules/
 /gemini/node_modules/
 /scripts/mermaid/node_modules/
+
+# browser-control-mcp built from source (has its own .git, rebuildable)
+/pi/mcp/browser-control-mcp/

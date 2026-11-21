@@ -2,6 +2,31 @@
 
 Config that belongs to [Pi](https://github.com/earendil-works/pi) (`pc` / `pi`).
 
+## Scoped profiles and memory
+
+`agents/bin/pi-personal` and `agents/bin/pi-work` use the harness-neutral
+`agent-profile` launcher documented in the root README. Plain `pi` remains
+generic mode without scoped memory. The Pi adapter sets:
+
+- `PI_CODING_AGENT_DIR=~/.agent/profiles/<profile>/pi`
+- `PI_CODING_AGENT_SESSION_DIR=$XDG_DATA_HOME/agent-profiles/<profile>/pi/sessions`
+  (or `~/.local/share/...` when `XDG_DATA_HOME` is unset)
+
+The launcher reserves `--session-dir` so it cannot bypass profile isolation;
+other Pi arguments pass through unchanged. Setup links generic
+extensions/keybindings/themes into both profiles and ticket-routing
+agents/prompts only into work. Auth, models, MCP and settings remain
+profile-specific.
+
+The shared personal/work memory stores and device notes live outside the Pi
+config directory under `~/.agent/profiles/<profile>/`. See
+`agents/personal-memory.md`, `agents/work-memory.md` and the root README for
+the scope policy. The protocols are inspired by
+[RikkaHub #2130](https://github.com/rikkahub/rikkahub/pull/2130).
+
+Tests: `python3 -m unittest scripts.tests.test_agent_guidance.InstructionsTest
+scripts.tests.test_agent_profiles`.
+
 ## extensions/
 
 Pi auto-discovers extensions in `~/.pi/agent/extensions/`. `setup-dev-env.sh`
