@@ -35,6 +35,8 @@ class InstructionsTest(unittest.TestCase):
             "agents/communication.md": "Plain language",
             "claude/RTK.md": "RTK rules",
             "pi/AGENTS-extra.md": "Ticket routing rules",
+            "agents/personal-memory.md": "PERSONAL_MEMORY_SENTINEL",
+            "agents/work-memory.md": "WORK_MEMORY_SENTINEL",
         }.items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +59,7 @@ class InstructionsTest(unittest.TestCase):
             self.assertTrue(path.is_symlink())
             self.assertIn("Plain language", path.read_text())
             self.assertEqual("RTK rules" in path.read_text(), harness in ("claude", "opencode"))
-            self.assertEqual("Ticket routing rules" in path.read_text(), harness == "pi")
+            self.assertNotIn("Ticket routing rules", path.read_text())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_private_context_before_or_after_personal_install(self):
@@ -71,9 +73,67 @@ class InstructionsTest(unittest.TestCase):
         self.install()
         self.install(work_context=context)
         for destination in instructions.TARGETS.values():
-            self.assertIn("PRIVATE_CONTEXT_SENTINEL", (self.home / destination).read_text())
+            self.assertNotIn("PRIVATE_CONTEXT_SENTINEL", (self.home / destination).read_text())
+        for profile, harnesses in instructions.PROFILE_TARGETS.items():
+            for destination in harnesses.values():
+                content = (self.home / destination).read_text()
+                if profile == "work":
+                    self.assertIn("PRIVATE_CONTEXT_SENTINEL", content)
+                else:
+                    self.assertNotIn("PRIVATE_CONTEXT_SENTINEL", content)
         for path in self.root.rglob("*.md"):
             self.assertNotIn("PRIVATE_CONTEXT_SENTINEL", path.read_text())
+
+    def test_memory_profiles_use_distinguishing_canaries_in_every_harness(self):
+        self.install()
+        for destination in instructions.TARGETS.values():
+            self.assertNotIn("MEMORY_SENTINEL", (self.home / destination).read_text())
+        for harness, destination in instructions.PROFILE_TARGETS["personal"].items():
+            content = (self.home / destination).read_text()
+            self.assertIn("PERSONAL_MEMORY_SENTINEL", content)
+            self.assertNotIn("WORK_MEMORY_SENTINEL", content)
+            self.assertNotIn("Ticket routing rules", content)
+            self.assertEqual("RTK rules" in content, harness in ("claude", "opencode"))
+        for harness, destination in instructions.PROFILE_TARGETS["work"].items():
+            content = (self.home / destination).read_text()
+            self.assertIn("WORK_MEMORY_SENTINEL", content)
+            self.assertNotIn("PERSONAL_MEMORY_SENTINEL", content)
+            self.assertEqual("Ticket routing rules" in content, harness == "pi")
+            self.assertEqual("RTK rules" in content, harness in ("claude", "opencode"))
+
+    def test_work_skill_links_move_to_work_profile_without_touching_personal_links(self):
+        work_skill = self.home / "code/work/private-repo/skills/work-skill"
+        personal_skill = self.home / "code/personal/repo/skills/personal-skill"
+        work_skill.mkdir(parents=True)
+        personal_skill.mkdir(parents=True)
+        (work_skill / "SKILL.md").write_text("WORK_SKILL_CANARY")
+        (personal_skill / "SKILL.md").write_text("PERSONAL_SKILL_CANARY")
+        claude_skills = self.home / ".claude/skills"
+        claude_skills.mkdir(parents=True)
+        (claude_skills / "work-skill").symlink_to(work_skill)
+        (claude_skills / "personal-skill").symlink_to(personal_skill)
+        agy_skills = self.home / ".gemini/config/plugins/personal-skills/skills"
+        agy_skills.mkdir(parents=True)
+        (agy_skills / "work-skill").symlink_to(work_skill)
+
+        self.install(dry_run=True)
+        self.assertTrue((claude_skills / "work-skill").is_symlink())
+        self.assertFalse((self.home / ".agent").exists())
+        self.install()
+        self.assertFalse((claude_skills / "work-skill").exists())
+        self.assertEqual((claude_skills / "personal-skill").resolve(), personal_skill.resolve())
+        scoped_claude = self.home / ".agent/profiles/work/claude/skills/work-skill"
+        scoped_agy = self.home / ".agent/profiles/work/agy-home/.gemini/config/plugins/personal-skills/skills/work-skill"
+        self.assertEqual(scoped_claude.resolve(), work_skill.resolve())
+        self.assertEqual(scoped_agy.resolve(), work_skill.resolve())
+
+    def test_scoped_instruction_destination_symlink_fails_before_writes(self):
+        profiles = self.home / ".agent/profiles"
+        (profiles / "work").mkdir(parents=True)
+        (profiles / "personal").symlink_to(profiles / "work")
+        with self.assertRaises(ValueError):
+            self.install()
+        self.assertFalse((self.home / ".config/agent-context").exists())
 
     def test_fail_closed_before_any_write(self):
         generated = self.home / ".config/agent-context/copilot.md"

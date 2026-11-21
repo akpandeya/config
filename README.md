@@ -158,17 +158,87 @@ python3 scripts/install-agent-instructions.py
 ```
 
 The composer writes private, mode-600 local files under
-`~/.config/agent-context/` and links all four instruction surfaces to them:
-Claude, OpenCode, Gemini and Copilot. It flattens optional
-`~/.hf-context/AGENTS.md` rather than assuming every harness supports imports.
-No combined private content is written into this repository. Existing global
-files/links are preserved as `.before-agent-context` backups. `--dry-run`
-previews; `--home <directory>` supports isolated checks.
+`~/.config/agent-context/` and links the harness instruction surfaces to them.
+It flattens optional `~/.hf-context/AGENTS.md` rather than assuming every
+harness supports imports. No combined private content is written into this
+repository. Existing global files/links are preserved as
+`.before-agent-context` backups. `--dry-run` previews; `--home <directory>`
+supports isolated checks.
 
 Company-specific AWS, Jira, Snowflake and incident workflows are installed by
 the private work-context repository, not copied back here. In work setup mode,
 bootstrap invokes that repo's link installer before composition, after the
 Gemini plugin directory exists. Either installation order is supported.
+
+### Harness-neutral memory profiles
+
+The scope resolver and memory protocols are shared across harnesses. Plain
+`pi`, `opencode`, `claude`, `copilot` and `agy` receive generic instructions
+without scoped Markdown memory or private work context. Scoped commands are:
+
+- `<harness>-personal`: personal instructions plus the RikkaHub-inspired
+  protocol in `agents/personal-memory.md`.
+- `<harness>-work`: private work instructions plus the curated protocol in
+  `agents/work-memory.md`.
+
+The launchers currently support Pi, OpenCode, Claude Code and Copilot through
+their native configuration hooks:
+
+| Harness | Profile configuration | Profile state |
+|---|---|---|
+| Pi | `PI_CODING_AGENT_DIR` | Separate `PI_CODING_AGENT_SESSION_DIR` |
+| OpenCode | `OPENCODE_CONFIG_DIR` | Profile-specific `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME`; `--standalone` avoids a shared background service |
+| Claude Code | `CLAUDE_CONFIG_DIR` | Config-root-local history/sessions |
+| Copilot | `COPILOT_HOME` | Home-local history/sessions |
+
+Harness-native or cloud memory features are outside this protocol. Disable
+them in generic mode or configure and verify their isolation separately;
+changing a local config root does not prove that a remote memory service is
+profile-scoped.
+
+`agy` has no verified config-directory override yet, so plain `agy` remains
+generic mode without scoped memory rather than receiving an unscoped personal
+or work profile. A future adapter can use a verified native hook or a
+deliberate HOME sandbox.
+
+`agents/bin/agent-profile` sanitizes inherited Git worktree overrides, resolves
+the canonical Git root and rejects wrong-profile or unknown locations.
+Worktrees are classified by real location, not repository identity. Each
+profile lives at `~/.agent/profiles/<profile>`; its harness configuration and
+state are separate, including session JSONL and compaction history. Config,
+data and instruction-link scope escapes are rejected. Existing legacy
+histories are not migrated or read by the scoped launchers; review them
+separately for offboarding.
+
+The composer also migrates existing work-owned skill symlinks out of generic
+Claude/Agy discovery into the scoped work profile. It moves only links whose
+targets resolve under `~/code/work`, leaves personal links and real directories
+untouched, and preserves conflicting destinations as backups.
+
+Memory content never lives in this public checkout:
+
+- Personal memory uses `~/code/personal/pi-memory` by default and is exposed as
+  `~/.agent/profiles/personal/memory`.
+- Work memory uses an employer-owned repository at `~/code/work/agent-memory`
+  by default and is exposed as `~/.agent/profiles/work/memory`. Set
+  `AGENT_WORK_MEMORY_DIR` to another canonical path under `~/code/work` when
+  the work setup chooses a different repository. `AGENT_PERSONAL_MEMORY_DIR`
+  provides the equivalent personal override under `~/code/personal`.
+- A missing repository means no long-term memory; the launchers never clone or
+  fall back to the other profile. Cross-scope and unexpected symlinks are
+  rejected rather than replaced.
+
+Work memory is limited to explicitly saved preferences, approved tool choices
+and glossary entries. Internal acronyms stay work-only. Project state,
+architecture, tickets and code stay in repository documentation. There is no
+automatic work-to-personal/shared consolidation. Generic shared preferences
+are changed only through reviewed config changes.
+
+Device notes may live at `~/.agent/profiles/<profile>/device.md`; they are
+local, untracked and shared by that profile's harnesses. Setup links selected
+generic Pi/OpenCode resources, but not auth, model endpoints, MCP servers or
+settings. This is accident-resistant separation, not a hard OS security
+boundary.
 
 ### Local HTML explanations
 
