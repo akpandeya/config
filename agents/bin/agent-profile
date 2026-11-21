@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# Launch an agent harness with memory, instructions and state scoped to a profile.
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: agent-profile <pi|opencode|claude|copilot> <personal|work> [arguments...]" >&2
+    exit 2
+fi
+harness=$1
+requested=$2
+shift 2
+case "$harness" in pi|opencode|claude|copilot) ;; *)
+    echo "agent-profile: unsupported harness '$harness'" >&2
+    exit 2
+    ;;
+esac
+case "$requested" in personal|work) ;; *)
+    echo "agent-profile: profile must be personal or work" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$harness" = pi ]; then
+    expect_session_source=
+    for argument in "$@"; do
+        if [ -n "$expect_session_source" ]; then
+            session_source=$argument
+            expect_session_source=
+            case "$session_source" in
+                */*|~*|*.jsonl|.|..)
+                    echo "agent-profile: external Pi session paths are disabled; use a session ID from this profile" >&2
+                    exit 2
+                    ;;
+            esac
+        fi
+        case "$argument" in
+            --session-dir|--session-dir=*)
+                echo "agent-profile: --session-dir is reserved; use the launcher-owned $requested session root" >&2
+                exit 2
+                ;;
+            --session|--fork) expect_session_source=$argument ;;
+            --session=*|--fork=*)
+                session_source=${argument#*=}
+                case "$session_source" in
+                    */*|~*|*.jsonl|.|..)
+                        echo "agent-profile: external Pi session paths are disabled; use a session ID from this profile" >&2
+                        exit 2
+                        ;;
+                esac
+                ;;
+        esac
+    done
+fi
+umask 077
+
+ensure_real_dir() {
+    local path=$1 label=$2 actual
+    if { [ -L "$path" ] && [ ! -d "$path" ]; } || ! mkdir -p "$path"; then
+        echo "agent-profile: $label is not a usable physical directory; refusing symlink scope escape" >&2
+        return 1
+    fi
+    actual=$(cd "$path" && pwd -P)
+    if [ "$actual" != "$path" ]; then
+        echo "agent-profile: $label resolves to a different physical directory; refusing symlink scope escape" >&2
+        return 1
+    fi
+}
+
+home_real=$(cd "$HOME" && pwd -P)
+personal_root="$home_real/code/personal"
+work_root="$home_real/code/work"
+physical_cwd=$(pwd -P)
+project_root=$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$physical_cwd" \
+    rev-parse --show-toplevel 2>/dev/null || printf '%s\n' "$physical_cwd")
+project_root=$(cd "$project_root" && pwd -P)
+
+case "$project_root" in
+    "$personal_root"|"$personal_root"/*) actual=personal ;;
+    "$work_root"|"$work_root"/*) actual=work ;;
+    *) actual=none ;;
+esac
+if [ "$actual" = none ]; then
+    echo "agent-profile: unrecognized project location; use the plain harness for generic mode without scoped memory" >&2
+    exit 2
+fi
+if [ "$actual" != "$requested" ]; then
+    echo "agent-profile: $requested profile requested from a $actual project; refusing to cross scopes" >&2
+    exit 2
+fi
+
+# Directory-changing options and positional directories must not move the
+# harness into a different scope after the launch cwd was validated.
+expect_directory=
+for argument in "$@"; do
+    if [ -n "$expect_directory" ] && [ ! -d "$argument" ]; then
+        echo "agent-profile: $expect_directory requires an existing directory" >&2
+        exit 2
+    fi
+    expect_directory=
+    directory_candidate=
+    case "$argument" in
+        --directory|-C) expect_directory=$argument ;;
+        --directory=*|-C=*)
+            directory_candidate=${argument#*=}
+            if [ ! -d "$directory_candidate" ]; then
+                echo "agent-profile: directory override does not exist: $directory_candidate" >&2
+                exit 2
+            fi
+            ;;
+        *)
+            if [ -d "$argument" ]; then
+                directory_candidate=$argument
+            fi
+            ;;
+    esac
+    if [ -n "$directory_candidate" ]; then
+        directory_real=$(cd "$directory_candidate" && pwd -P)
+        case "$requested" in
+            personal) allowed_root=$personal_root ;;
+            work) allowed_root=$work_root ;;
+        esac
+        case "$directory_real" in
+            "$allowed_root"|"$allowed_root"/*) ;;
+            *)
+                echo "agent-profile: directory argument crosses the $requested scope" >&2
+                exit 2
+                ;;
+        esac
+    fi
+done
+
+profile_root="$home_real/.agent/profiles/$requested"
+data_base="${XDG_DATA_HOME:-$home_real/.local/share}"
+mkdir -p "$data_base"
+data_base=$(cd "$data_base" && pwd -P)
+data_root="$data_base/agent-profiles/$requested"
+ensure_real_dir "$profile_root" "profile root"
+ensure_real_dir "$data_root" "profile data root"
+
+if [ "$requested" = personal ]; then
+    memory_source=${AGENT_PERSONAL_MEMORY_DIR:-$personal_root/pi-memory}
+    expected_root=$personal_root
+else
+    memory_source=${AGENT_WORK_MEMORY_DIR:-$work_root/agent-memory}
+    expected_root=$work_root
+fi
+memory_link="$profile_root/memory"
+unset AGENT_MEMORY_ROOT
+
+if [ -d "$memory_source" ]; then
+    memory_real=$(cd "$memory_source" && pwd -P)
+    case "$memory_real" in
+        "$expected_root"|"$expected_root"/*) ;;
+        *)
+            echo "agent-profile: $requested memory resolves outside $expected_root; refusing the link" >&2
+            exit 1
+            ;;
+    esac
+    if [ -L "$memory_link" ]; then
+        existing=$(cd "$memory_link" && pwd -P)
+        if [ "$existing" != "$memory_real" ]; then
+            echo "agent-profile: $memory_link points at a different memory store; refusing to replace it" >&2
+            exit 1
+        fi
+    elif [ -e "$memory_link" ]; then
+        echo "agent-profile: $memory_link is not a symlink; refusing to replace it" >&2
+        exit 1
+    else
+        ln -s "$memory_real" "$memory_link"
+    fi
+    export AGENT_MEMORY_ROOT=$memory_link
+elif [ -e "$memory_link" ] || [ -L "$memory_link" ]; then
+    echo "agent-profile: configured $requested memory is unavailable but $memory_link exists; repair it before continuing" >&2
+    exit 1
+else
+    echo "agent-profile: $requested memory is not configured; continuing without long-term memory" >&2
+fi
+
+export AGENT_MEMORY_SCOPE=$requested
+export AGENT_PROFILE_ROOT=$profile_root
+export AGENT_DEVICE_MEMORY_FILE="$profile_root/device.md"
+
+case "$harness" in
+    pi)
+        config_dir="$profile_root/pi"
+        instruction="$config_dir/AGENTS.md"
+        session_dir="$data_root/pi/sessions"
+        ;;
+    opencode)
+        config_dir="$profile_root/opencode"
+        instruction="$config_dir/AGENTS.md"
+        state_base="${XDG_STATE_HOME:-$home_real/.local/state}"
+        cache_base="${XDG_CACHE_HOME:-$home_real/.cache}"
+        mkdir -p "$state_base" "$cache_base"
+        state_base=$(cd "$state_base" && pwd -P)
+        cache_base=$(cd "$cache_base" && pwd -P)
+        state_root="$state_base/agent-profiles/$requested"
+        cache_root="$cache_base/agent-profiles/$requested"
+        # A shared background service would undo config/data isolation.
+        set -- --standalone "$@"
+        ;;
+    claude)
+        config_dir="$profile_root/claude"
+        instruction="$config_dir/CLAUDE.md"
+        ;;
+    copilot)
+        config_dir="$profile_root/copilot"
+        instruction="$config_dir/copilot-instructions.md"
+        ;;
+esac
+ensure_real_dir "$config_dir" "harness config root"
+case "$harness" in
+    pi)
+        ensure_real_dir "$session_dir" "Pi session root"
+        export PI_CODING_AGENT_DIR=$config_dir
+        export PI_CODING_AGENT_SESSION_DIR=$session_dir
+        ;;
+    opencode)
+        ensure_real_dir "$state_root" "OpenCode state root"
+        ensure_real_dir "$cache_root" "OpenCode cache root"
+        ensure_real_dir "$data_root/opencode" "OpenCode data directory"
+        ensure_real_dir "$state_root/opencode" "OpenCode state directory"
+        ensure_real_dir "$cache_root/opencode" "OpenCode cache directory"
+        unset OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT
+        export OPENCODE_CONFIG_DIR=$config_dir
+        export XDG_DATA_HOME=$data_root
+        export XDG_STATE_HOME=$state_root
+        export XDG_CACHE_HOME=$cache_root
+        ;;
+    claude) export CLAUDE_CONFIG_DIR=$config_dir ;;
+    copilot) export COPILOT_HOME=$config_dir ;;
+esac
+if [ -L "$profile_root/device.md" ]; then
+    echo "agent-profile: device.md must be a local regular file, not a symlink" >&2
+    exit 1
+fi
+expected_instruction_link="$home_real/.config/agent-context/$harness-$requested.md"
+if [ -L "$instruction" ] && [ "$(readlink "$instruction")" != "$expected_instruction_link" ]; then
+    echo "agent-profile: instruction link does not match this harness/profile; refusing to continue" >&2
+    exit 1
+fi
+if [ ! -f "$instruction" ]; then
+    echo "agent-profile: $instruction is missing; run setup-dev-env.sh first" >&2
+    exit 1
+fi
+if ! command -v "$harness" >/dev/null 2>&1; then
+    echo "agent-profile: $harness executable not found" >&2
+    exit 1
+fi
+# Do not let inherited repository overrides redirect the agent's own Git
+# commands after the physical cwd has been validated.
+unset GIT_DIR GIT_WORK_TREE
+exec "$harness" "$@"

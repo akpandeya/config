@@ -365,6 +365,13 @@ link_config "$REPO_DIR/pi/extensions/ask-user.ts" \
 link_config "$REPO_DIR/pi/keybindings.json" \
             "$HOME/.pi/agent/keybindings.json"
 
+# Scoped harness launchers. Plain harnesses get no scoped-memory protocol;
+# wrappers share one resolver and verify the external memory repository.
+for launcher in agent-profile pi-personal pi-work opencode-personal opencode-work \
+                claude-personal claude-work copilot-personal copilot-work; do
+    link_config "$REPO_DIR/agents/bin/$launcher" "$HOME/.local/bin/$launcher"
+done
+
 # The self-hosted ddg-search MCP server (pi/README.md): install its pinned
 # dependencies and register it user-level. npm i is idempotent; the mcp.json
 # merge never removes servers the user added themselves.
@@ -525,6 +532,25 @@ if [ "$DRY_RUN" = "1" ]; then
 else
     python3 "$REPO_DIR/scripts/install-agent-instructions.py"
 fi
+
+# The composer has now preflighted every scoped config root. Only after that
+# validation may link_config write profile resources: a symlinked parent must
+# never redirect work resources into personal storage (or vice versa).
+# Auth, model endpoints, MCP servers and settings remain profile-specific.
+for profile in personal work; do
+    profile_root="$HOME/.agent/profiles/$profile"
+    link_config "$HOME/.pi/agent/extensions" "$profile_root/pi/extensions"
+    link_config "$HOME/.pi/agent/keybindings.json" "$profile_root/pi/keybindings.json"
+    if [ -d "$HOME/.pi/agent/themes" ]; then
+        link_config "$HOME/.pi/agent/themes" "$profile_root/pi/themes"
+    fi
+    if [ -d "$HOME/.config/opencode/command" ]; then
+        link_config "$HOME/.config/opencode/command" "$profile_root/opencode/command"
+    fi
+done
+# Ticket-routing subagents and prompts belong only to the work Pi profile.
+link_config "$HOME/.pi/agent/agents" "$HOME/.agent/profiles/work/pi/agents"
+link_config "$HOME/.pi/agent/prompts" "$HOME/.agent/profiles/work/pi/prompts"
 
 # --- End Shared Antigravity Setup ---
 
