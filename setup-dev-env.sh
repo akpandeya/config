@@ -421,6 +421,13 @@ for launcher in agent-profile pi-personal pi-work opencode-personal opencode-wor
     link_config "$REPO_DIR/agents/bin/$launcher" "$HOME/.local/bin/$launcher"
 done
 
+# Scoped harness launchers. Plain harnesses get no scoped-memory protocol;
+# wrappers share one resolver and verify the external memory repository.
+for launcher in agent-profile pi-personal pi-work opencode-personal opencode-work \
+                claude-personal claude-work copilot-personal copilot-work; do
+    link_config "$REPO_DIR/agents/bin/$launcher" "$HOME/.local/bin/$launcher"
+done
+
 # The self-hosted ddg-search MCP server (pi/README.md): install its pinned
 # dependencies and register it user-level. npm i is idempotent; the mcp.json
 # merge never removes servers the user added themselves.
