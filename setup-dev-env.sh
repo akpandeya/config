@@ -7,6 +7,49 @@ set -e
 
 DRY_RUN="${DRY_RUN:-0}"
 
+REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ATELIER_DIR="$( cd "$REPO_DIR/.." && pwd )/atelier"
+
+# Atelier supplies the renderer, overlay, shared feedback skill and OpenCode
+# command linked below. Validate every required source before installing
+# packages or changing the machine; skipping Mermaid dependencies does not make
+# the rest of the integration optional. This check also runs under DRY_RUN so a
+# preview cannot claim that an incomplete checkout would work.
+preflight_atelier() {
+    echo "=== Checking required atelier integration ==="
+    echo "Atelier checkout: $ATELIER_DIR"
+    if [ ! -d "$ATELIER_DIR" ]; then
+        echo "ERROR: atelier is required next to config ($ATELIER_DIR)." >&2
+        echo "Clone https://github.com/akpandeya/atelier there before running setup." >&2
+        exit 1
+    fi
+
+    local required_inputs=(
+        "scripts/agent-explainer.py"
+        "scripts/artifact-overlay.js"
+        "scripts/mermaid/package.json"
+        "scripts/mermaid/package-lock.json"
+        "agents/artifact-feedback.md"
+        "skills/artifact-feedback/SKILL.md"
+        "opencode/command/artifact-feedback.md"
+    )
+    local missing=0
+    local relative
+    for relative in "${required_inputs[@]}"; do
+        if [ ! -f "$ATELIER_DIR/$relative" ]; then
+            echo "ERROR: required atelier input is missing: $ATELIER_DIR/$relative" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" -ne 0 ]; then
+        echo "Update or restore the atelier checkout before running setup." >&2
+        exit 1
+    fi
+    echo "✓ All required atelier integration inputs are present"
+    echo
+}
+preflight_atelier
+
 # --- OS Detection ---
 OS_TYPE="$(uname -s)"
 echo "=== Development Environment Setup ==="
@@ -252,9 +295,6 @@ echo
 echo "=== Installing Pi CLI ==="
 echo
 
-REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-ATELIER_DIR="$( cd "$REPO_DIR/.." && pwd )/atelier"
-
 # Homebrew packages (including node) are installed before the Pi CLI.
 DRY_RUN="$DRY_RUN" bash "$REPO_DIR/scripts/install-pi.sh"
 
@@ -479,11 +519,10 @@ fi
 # headless Chrome once, while normal explanation generation uses only these
 # installed local files and never fetches packages or browsers.
 if [ "${SKIP_MERMAID:-0}" = "1" ]; then
-    echo "SKIP_MERMAID=1 — skipping agent explainer Mermaid dependencies."
+    echo "SKIP_MERMAID=1 — skipping Mermaid dependencies only; atelier links are still required."
 elif [ "$DRY_RUN" = "1" ]; then
     echo "Would run: npm ci --prefix $ATELIER_DIR/scripts/mermaid"
 else
-    [ -d "$ATELIER_DIR" ] || { echo "atelier repo missing next to config ($ATELIER_DIR)"; exit 1; }
     echo "=== Installing agent explainer Mermaid dependencies ==="
     npm ci --prefix "$ATELIER_DIR/scripts/mermaid" --no-audit --no-fund
     echo "✓ Mermaid CLI + pinned headless Chrome installed for agent-explainer.py"

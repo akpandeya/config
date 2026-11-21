@@ -1,6 +1,4 @@
-import base64
 import contextlib
-import hashlib
 import importlib.util
 import io
 import json
@@ -8,10 +6,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +21,6 @@ def load(name, path):
 
 
 instructions = load("instructions", ROOT / "scripts/install-agent-instructions.py")
-explainer = load("explainer", ROOT / "scripts/agent-explainer.py")
 
 
 class InstructionsTest(unittest.TestCase):
@@ -196,6 +191,37 @@ class WatcherTest(unittest.TestCase):
 ATELIER = Path(__file__).resolve().parents[3] / "atelier"
 
 
+class AtelierPreflightTest(unittest.TestCase):
+    def setUp(self):
+        self.setup = (ROOT / "setup-dev-env.sh").read_text()
+        self.preflight = self.setup.split("preflight_atelier() {", 1)[1].split("\n}", 1)[0]
+
+    def test_preflight_runs_before_profile_packages_or_ssh(self):
+        call = self.setup.index("\npreflight_atelier\n")
+        for later_step in ("# --- Profile Selection ---", "# Check if Homebrew",
+                           "=== Installing packages ===", "=== Setting up SSH keys"):
+            with self.subTest(later_step=later_step):
+                self.assertLess(call, self.setup.index(later_step))
+        self.assertEqual(self.setup.count('ATELIER_DIR="$('), 1)
+
+    def test_preflight_requires_every_linked_input_even_for_dry_run(self):
+        for relative in (
+            "scripts/agent-explainer.py",
+            "scripts/artifact-overlay.js",
+            "scripts/mermaid/package.json",
+            "scripts/mermaid/package-lock.json",
+            "agents/artifact-feedback.md",
+            "skills/artifact-feedback/SKILL.md",
+            "opencode/command/artifact-feedback.md",
+        ):
+            with self.subTest(relative=relative):
+                self.assertIn(f'"{relative}"', self.preflight)
+        self.assertIn('exit 1', self.preflight)
+        self.assertNotIn('SKIP_MERMAID', self.preflight)
+        self.assertLess(self.setup.index("\npreflight_atelier\n"),
+                        self.setup.index('if [ "$DRY_RUN" = "1" ]; then'))
+
+
 @unittest.skipUnless(
     (ATELIER / "scripts/agent-explainer.py").is_file(),
     "atelier repo not checked out next to config",
@@ -258,6 +284,20 @@ class AtelierIntegrationTest(unittest.TestCase):
         self.assertIn("/changes#diff-", output)
         self.assertIn("Diff-validated, UI-unverified", output)
         self.assertIn("https://github.com/hellofresh/production-planning/compare/ab33640f", output)
+
+    def test_feedback_links_use_shared_atelier_skill(self):
+        skill = ROOT / "skills/artifact-feedback"
+        self.assertTrue(skill.is_symlink())
+        self.assertEqual(os.readlink(skill), "../../atelier/skills/artifact-feedback")
+        self.assertEqual(skill.resolve(), ATELIER / "skills/artifact-feedback")
+        self.assertTrue((skill / "SKILL.md").is_file())
+        self.assertFalse(os.path.lexists(ROOT / "claude/skills/artifact-feedback"))
+
+        command = ROOT / "opencode/command/artifact-feedback.md"
+        self.assertTrue(command.is_symlink())
+        self.assertEqual(os.readlink(command), "../../../atelier/opencode/command/artifact-feedback.md")
+        self.assertEqual(command.resolve(), ATELIER / "opencode/command/artifact-feedback.md")
+        self.assertTrue(command.is_file())
 
     def test_mermaid_setup_points_at_atelier(self):
         package = json.loads((ATELIER / "scripts/mermaid/package.json").read_text())

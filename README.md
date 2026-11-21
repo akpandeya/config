@@ -10,8 +10,10 @@ Personal dotfiles + macOS bootstrap. One-command setup for a fresh Mac.
 #    Settings → Developer → "Integrate with 1Password CLI"
 #    Sign in to 1Password.
 
-# 2. Clone this repo via HTTPS (SSH keys come later).
+# 2. Clone config and the required private atelier repo side by side via
+#    HTTPS (SSH keys come later). Your GitHub account needs atelier access.
 git clone https://github.com/akpandeya/config
+git clone https://github.com/akpandeya/atelier
 cd config
 
 # 3. Add your git identity emails (gitignored, never committed):
@@ -57,11 +59,11 @@ Edit the `KEYS=(...)` array in `ssh/setup.sh` to add/remove keys.
 | `kitty/` | Terminal config |
 | `pi/` | Pi config. `pi/extensions/plan-mode/` is a vendored copy of the pi `plan-mode` extension, symlinked to `~/.pi/agent/extensions/plan-mode` (read-only planning that asks **Approve / Keep planning / Revise** until you approve, then executes with step tracking; `Shift+Tab`; the review pass and optionally the implementer run as isolated subagents). `pi/keybindings.json` moves thinking-level cycling to `Alt+T` to free `Shift+Tab`. `pi/prompts/` holds pi prompt templates (`/pick-up-ticket`), symlinked into `~/.pi/agent/prompts/` |
 | `agents/` | Shared communication policy composed into every harness's global instructions by `scripts/install-agent-instructions.py` |
-| `scripts/` | Instruction composer, offline explanation renderer and bootstrap helpers |
+| `scripts/` | Instruction composer, Pi installer and bootstrap helpers |
 | `shell/` | Shared shell aliases (incl. `va`: activate the nearest `.venv`, walking up) + the `dev` repo/harness launcher (`dev.sh`, `dev-shortcuts.conf`) |
 | `ssh/` | SSH-from-1Password installer (templates + `setup.sh`) |
 | `starship/` | Prompt config |
-| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, Claude skills+hooks, local Mermaid renderer, optional Jarvis (clone + `make install` + launchd agents). Env vars: `SETUP_MODE=work\|personal` (which git identity/profile to configure — inferred from existing `~/.gitconfig-work` when unset), `DRY_RUN=1` (print what would happen, change nothing), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1`, `SKIP_SCHEDULES=1`, `SKIP_PI=1` (skip Pi CLI installation) |
+| `setup-dev-env.sh` | Top-level bootstrap — Homebrew, git, SSH, shared skills+hooks, atelier Mermaid dependencies, optional Jarvis (clone + `make install` + launchd agents). Atelier must be cloned next to config. Env vars: `SETUP_MODE=work\|personal` (which git identity/profile to configure — inferred from existing `~/.gitconfig-work` when unset), `DRY_RUN=1` (print what would happen, change nothing; still validates atelier), `INSTALL_JARVIS=1` (Jarvis is opt-in, not installed by default), `SKIP_MERMAID=1` (skip Mermaid dependency installation only), `SKIP_SCHEDULES=1`, `SKIP_PI=1` (skip Pi CLI installation) |
 
 ## Jumping into a repo with an AI harness (`dev`)
 
@@ -170,16 +172,12 @@ Gemini plugin directory exists. Either installation order is supported.
 
 ### Local HTML explanations
 
-The artifact toolchain — the `agent-explainer.py` offline HTML
-explanation/review renderer, the comment feedback overlay, the localhost
-feedback server and the harness-agnostic apply-feedback loop — lives in the
-[atelier](https://github.com/akpandeya/atelier) repo (private), split out of
-config once it outgrew configuration. See that repo's README for usage, the
-feedback API and the planned mockup generator.
-
-`setup-dev-env.sh` still installs the pinned Mermaid renderer (into atelier)
-and links the `/artifact-feedback` OpenCode command and Claude/Gemini skill
-into their live locations from atelier.
+The offline HTML explanation/review renderer and feedback toolchain live in
+the private [atelier](https://github.com/akpandeya/atelier) repo. Its README
+owns the invocation, complete input JSON format, supported blocks and feedback
+options. Clone atelier next to config before setup: the bootstrap installs its
+pinned Mermaid dependencies and links the shared `artifact-feedback` skill and
+OpenCode command from that checkout.
 
 ### Review boundaries and portability
 

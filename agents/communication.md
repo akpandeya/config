@@ -33,7 +33,7 @@ An isolated one-line finding or small re-review update does not need a new page.
 
 Use `python3 ~/code/personal/atelier/scripts/agent-explainer.py --repo <repo-path>
 --topic <stable-topic> --input <json-file>`; see the script's `--help` and the
-config README for the input format. It saves outside Git under
+atelier README for the input format. It saves outside Git under
 `~/.local/share/agent-explainers/<repo>/<topic>.html` and opens the local file.
 Use `--no-open` when requested or in unattended/headless work.
 
