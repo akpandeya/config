@@ -192,9 +192,55 @@ ATELIER = Path(__file__).resolve().parents[3] / "atelier"
 
 
 class AtelierPreflightTest(unittest.TestCase):
+    REQUIRED_INPUTS = (
+        "scripts/agent-explainer.py",
+        "scripts/artifact-overlay.js",
+        "scripts/mermaid/package.json",
+        "scripts/mermaid/package-lock.json",
+        "agents/artifact-feedback.md",
+        "skills/artifact-feedback/SKILL.md",
+        "opencode/command/artifact-feedback.md",
+    )
+    SENTINEL = "PREFLIGHT_RETURNED_9C3F1A"
+
     def setUp(self):
         self.setup = (ROOT / "setup-dev-env.sh").read_text()
-        self.preflight = self.setup.split("preflight_atelier() {", 1)[1].split("\n}", 1)[0]
+        marker = "# --- OS Detection ---"
+        self.assertEqual(self.setup.count(marker), 1,
+                         "preflight harness requires exactly one OS detection marker")
+        self.harness_prefix = self.setup.split(marker, 1)[0]
+
+    def run_preflight(self, missing=None):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            config = base / "config"
+            home = base / "home"
+            atelier = base / "atelier"
+            config.mkdir()
+            home.mkdir()
+            if missing != "checkout":
+                for relative in self.REQUIRED_INPUTS:
+                    if relative == missing:
+                        continue
+                    path = atelier / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("test input\n")
+
+            harness = config / "setup-dev-env.sh"
+            harness.write_text(self.harness_prefix + f'\necho "{self.SENTINEL}"\n')
+            harness.chmod(0o755)
+            result = subprocess.run(
+                [str(harness)],
+                env={**os.environ, "HOME": str(home), "DRY_RUN": "1", "SKIP_MERMAID": "1"},
+                capture_output=True, text=True, timeout=20,
+            )
+            return result, atelier
+
+    def assert_preflight_failed(self, result, error, missing_path):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(error, result.stderr)
+        self.assertIn(str(missing_path), result.stderr)
+        self.assertNotIn(self.SENTINEL, result.stdout + result.stderr)
 
     def test_preflight_runs_before_profile_packages_or_ssh(self):
         call = self.setup.index("\npreflight_atelier\n")
@@ -204,22 +250,24 @@ class AtelierPreflightTest(unittest.TestCase):
                 self.assertLess(call, self.setup.index(later_step))
         self.assertEqual(self.setup.count('ATELIER_DIR="$('), 1)
 
-    def test_preflight_requires_every_linked_input_even_for_dry_run(self):
-        for relative in (
-            "scripts/agent-explainer.py",
-            "scripts/artifact-overlay.js",
-            "scripts/mermaid/package.json",
-            "scripts/mermaid/package-lock.json",
-            "agents/artifact-feedback.md",
-            "skills/artifact-feedback/SKILL.md",
-            "opencode/command/artifact-feedback.md",
-        ):
+    def test_preflight_rejects_missing_checkout_before_later_steps(self):
+        result, atelier = self.run_preflight(missing="checkout")
+        self.assert_preflight_failed(
+            result, "ERROR: atelier is required next to config", atelier,
+        )
+
+    def test_preflight_requires_every_linked_input_even_for_dry_run_and_skip_mermaid(self):
+        for relative in self.REQUIRED_INPUTS:
             with self.subTest(relative=relative):
-                self.assertIn(f'"{relative}"', self.preflight)
-        self.assertIn('exit 1', self.preflight)
-        self.assertNotIn('SKIP_MERMAID', self.preflight)
-        self.assertLess(self.setup.index("\npreflight_atelier\n"),
-                        self.setup.index('if [ "$DRY_RUN" = "1" ]; then'))
+                result, atelier = self.run_preflight(missing=relative)
+                self.assert_preflight_failed(
+                    result, "ERROR: required atelier input is missing", atelier / relative,
+                )
+
+    def test_preflight_complete_inputs_reach_later_steps(self):
+        result, _ = self.run_preflight()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(self.SENTINEL, result.stdout)
 
 
 @unittest.skipUnless(
