@@ -19,8 +19,13 @@
  * - `input` (streamingBehavior "steer") records `{ text, hasImages }` in
  *   arrival order. Text is raw, before skill/template expansion.
  * - `message_end` for a user message is a native queue delivery, except the
- *   run's own starting prompt (captured in `before_agent_start` as the
- *   post-expansion prompt, adopted on `agent_start`). Deliveries usually
+ *   run's own starting prompt. That prompt is identified positionally, not
+ *   by text: `before_agent_start` for a user run arms a one-shot guard, and
+ *   the first user `message_end` consumes it — while no assistant message
+ *   exists yet, that message is the run's own prompt and correlation is
+ *   skipped. Text comparison cannot work here because pi builds the starting
+ *   message as `prompt + image hints` when images are attached, so the text
+ *   never equals the raw prompt. Deliveries usually
  *   arrive after the run's first assistant message, but pi can also drain
  *   queued steers at the very start of a run or automatic continuation,
  *   before any assistant message exists — those correlate too; skipping all
@@ -87,14 +92,18 @@ function messageImages(message: AgentMessage) {
  * compared as a trimmed prefix in either direction-safe form; skill/template
  * expansion can change the text, which is why unmatchable deliveries retire
  * the oldest record instead of sticking around. An image-only record matches
- * a delivered message that has images and no text.
+ * any delivered message that carries an image block: pi's queue normalization
+ * can append image-hint text to the delivery, and that generated text is not
+ * user content, so the delivered text is not required to be empty.
  */
 function matchesRecord(deliveredMessage: AgentMessage, record: SteerRecord): boolean {
 	const text = messageText(deliveredMessage);
 	const hasImages = messageImages(deliveredMessage).length > 0;
 	const rawTrimmed = record.text.trim();
 	if (rawTrimmed.length === 0) {
-		return record.hasImages && hasImages && text.trim().length === 0;
+		// Image-only record: pi's queue normalization can append hint text to
+		// the delivery, so the delivered text is not required to be empty.
+		return record.hasImages && hasImages;
 	}
 	if (text.trim().length === 0) return false;
 	const deliveredTrimmed = text.trimStart();
@@ -137,10 +146,13 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	let framed: SteerRecord[] = [];
 	/** Whether the current run has produced an assistant message yet. */
 	let runSawAssistant = false;
-	/** Starting prompt staged by `before_agent_start`, adopted on `agent_start`. */
-	let stagedPrompt: string | undefined;
-	/** The current run's own starting prompt (post-expansion text). */
-	let runPrompt: string | undefined;
+	/**
+	 * One-shot positional guard for the run's own starting prompt: armed by
+	 * `before_agent_start` (user runs only), consumed by the first user
+	 * `message_end`. While armed and pre-assistant, that first user message is
+	 * the run's prompt, not a queue delivery.
+	 */
+	let promptSkipArmed = false;
 
 	function updateStatus(ctx: ExtensionContext): void {
 		if (pending.length > 0) {
@@ -167,16 +179,15 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	// recorded steers, drop it so it is not framed later. Exact match on
 	// purpose: prefix matching could drop a different, prefix-related pending
 	// entry; a missed drop only stays pending until agent_settled clears it.
-	// The prompt is also staged here because `before_agent_start` fires before
-	// `agent_start`: message_end needs it to tell the run's own prompt apart
-	// from genuine pre-assistant deliveries.
+	// This is also the only place the positional skip guard is armed, so a
+	// continuation-only `agent_start` never skips the first user message.
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (event.messageType !== "user") {
 			// Custom-message runs have no user prompt; nothing may be skipped.
-			stagedPrompt = undefined;
+			promptSkipArmed = false;
 			return;
 		}
-		stagedPrompt = event.prompt;
+		promptSkipArmed = true;
 		if (pending.length === 0) return;
 		const prompt = event.prompt.trim();
 		const idx = pending.findIndex((p) => p.text.trim() === prompt);
@@ -188,13 +199,9 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 
 	pi.on("agent_start", async () => {
 		runSawAssistant = false;
-		// Adopt the staged prompt; agent_start must not clear a value set by
-		// before_agent_start. Continuations re-fire agent_start without a new
-		// before_agent_start, keeping the same run prompt.
-		runPrompt = stagedPrompt;
 	});
 
-	pi.on("message_end", async (event) => {
+	pi.on("message_end", async (event, ctx) => {
 		const message = event.message;
 		if (message.role === "assistant") {
 			runSawAssistant = true;
@@ -205,12 +212,15 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		// correlated too, because pi can drain queued steers at the very start
 		// of a run or automatic continuation — with one exception: the run's
 		// own starting prompt, which fires before any assistant message and is
-		// not a delivery.
+		// not a delivery. That prompt is skipped positionally (one-shot guard,
+		// see `promptSkipArmed`), never by text: pi appends image hints to the
+		// starting message, so its text differs from the raw prompt.
 		if (message.role !== "user" || pending.length === 0) return;
-		if (!runSawAssistant) {
-			if (runPrompt !== undefined && messageText(message).trim() === runPrompt.trim()) {
-				return;
-			}
+		if (promptSkipArmed) {
+			// Consume the guard on the first user message_end either way, so it
+			// can never wrongly skip a later delivery.
+			promptSkipArmed = false;
+			if (!runSawAssistant) return;
 		}
 
 		const boundIdx = pending.findLastIndex((record) => matchesRecord(message, record));
@@ -229,6 +239,8 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		// one record is still the benign direction: a later delivery then goes
 		// out unframed rather than a follow-up being falsely framed.
 		pending.shift();
+		// Retirement changed the pending count; refresh the status.
+		updateStatus(ctx);
 	});
 
 	pi.on("context_with_system", async (event, ctx) => {
@@ -305,16 +317,18 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	// so those records are kept too; agent_settled clears them if no retry
 	// happens.
 	pi.on("turn_end", async (event) => {
-		if (event.outcome === "completed" && event.message?.stopReason !== "length" && framed.length > 0) {
-			framed = [];
-		}
+		if (event.outcome !== "completed" || framed.length === 0) return;
+		// `stopReason` only exists on assistant messages; narrow first.
+		const message = event.message;
+		const isLength = message?.role === "assistant" && message.stopReason === "length";
+		if (!isLength) framed = [];
 	});
 
 	// Abort returns queued messages to the editor natively; stale records must
 	// never frame an unrelated future prompt. Settled also covers the normal
 	// end of a run, clearing any leftovers.
 	pi.on("agent_settled", async (_event, ctx) => {
-		runPrompt = undefined;
+		promptSkipArmed = false;
 		if (pending.length === 0 && framed.length === 0) return;
 		pending = [];
 		framed = [];
@@ -325,8 +339,7 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		pending = [];
 		framed = [];
 		runSawAssistant = false;
-		stagedPrompt = undefined;
-		runPrompt = undefined;
+		promptSkipArmed = false;
 		updateStatus(ctx);
 	});
 }
