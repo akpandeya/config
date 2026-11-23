@@ -315,6 +315,11 @@ Local deviations from upstream:
   intentionally left floating (unpinned) in the install list so internal
   fixes arrive automatically on the next bootstrap.
 
+  Message queueing: `steeringMode` and `followUpMode` are set to `"all"` in
+  `~/.pi/agent/settings.json` — messages typed while the agent runs are drained
+  as one batch into the next request (pi's default `one-at-a-time` burned a
+  full-context turn per queued message).
+
 Everything else is upstream. If you customize further, note it here.
 
 ### inline-bash, subagent, dynamic-tools (vendored)
