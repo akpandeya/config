@@ -34,8 +34,13 @@ const ROOT = process.env.PI_EXTENSIONS_TEST_ROOT;
 const PKG = process.env.PI_EXTENSIONS_TEST_PKG;
 if (!ROOT || !PKG) throw new Error("PI_EXTENSIONS_TEST_ROOT / PI_EXTENSIONS_TEST_PKG not set");
 
-const { createJiti } = await import(path.join(PKG, "node_modules/jiti/lib/jiti.mjs"));
-const base = path.join(PKG, "node_modules");
+// jiti and the alias targets are nested under the package's own node_modules
+// on npm-global installs, but hoisted to the install root when pi manages its
+// own tree (e.g. ~/.pi/agent/install). Resolve whichever layout exists.
+const nestedBase = path.join(PKG, "node_modules");
+const hoistedBase = path.join(PKG, "..", "..");
+const base = fs.existsSync(path.join(nestedBase, "jiti")) ? nestedBase : hoistedBase;
+const { createJiti } = await import(path.join(base, "jiti/lib/jiti.mjs"));
 const jiti = createJiti(import.meta.url, {
 	alias: {
 		typebox: path.join(base, "typebox/build/index.mjs"),
@@ -666,4 +671,710 @@ test("session_before_compact: overflow recovery never reuses the cache, even a f
 		await handlers.session_before_compact({ reason: "manual", preparation: { tokensBefore: 200_000 } }, ctx),
 		undefined,
 	);
+});
+
+// ---------------------------------------------------------------------------
+// steering-frame.ts — steering delivery framing state machine
+// ---------------------------------------------------------------------------
+
+async function loadSteeringFrame() {
+	const mod = await jiti.import(path.join(ROOT, "pi/extensions/steering-frame.ts"), { default: true });
+	const handlers = {};
+	const status = {};
+	const pi = {
+		on(event, handler) {
+			(handlers[event] ??= []).push(handler);
+		},
+		ui: {
+			setStatus(key, value) {
+				status[key] = value;
+			},
+			theme: { fg: (_kind, text) => text },
+		},
+	};
+	await mod(pi);
+	const ctx = { ui: pi.ui };
+	const fire = async (event, payload) => {
+		const results = [];
+		for (const handler of handlers[event] ?? []) results.push(await handler(payload, ctx));
+		return results;
+	};
+	return { fire, status };
+}
+
+let steerSeq = 0;
+const userMsg = (content) => ({ role: "user", content, timestamp: ++steerSeq });
+const imageOnlyMsg = () => ({
+	role: "user",
+	content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+	timestamp: ++steerSeq,
+});
+const toolResultMsg = (text) => ({ role: "toolResult", content: [{ type: "text", text }], timestamp: ++steerSeq });
+const assistantToolMsg = () => ({
+	role: "assistant",
+	content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }],
+	timestamp: ++steerSeq,
+});
+
+/** Simulate the run reaching its first assistant message (enables delivery correlation). */
+async function runStarted(ext) {
+	await ext.fire("agent_start", {});
+	await ext.fire("message_end", { message: assistantToolMsg() });
+}
+
+/**
+ * Simulate the native drain: each text is appended as a user message
+ * (message_end fires per message), then the next LLM call prepares. Inputs
+ * must be recorded beforehand via fire("input", ...) — one per typed message.
+ */
+async function deliverAndPrepare(ext, transcript, texts) {
+	for (const text of texts) {
+		transcript.push(userMsg(text));
+		await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	}
+	const results = await ext.fire("context_with_system", { messages: transcript });
+	return results[0];
+}
+
+test("steering-frame: single steer is framed at the next boundary and cleared after the turn", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "Also run echo DELTA", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["Also run echo DELTA"]))?.messages;
+	const last = result[result.length - 1];
+	assert.equal(last.role, "user");
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. Also run echo DELTA/);
+	assert.equal(result.length, transcript.length, "batch folds into one message");
+	// Framed records stay until the turn completes (retry safety)...
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(retry[retry.length - 1].content, /<user-steering>/, "retry re-frames");
+	// ...and are dropped once the turn completes, so the next idle prompt is raw.
+	await ext.fire("turn_end", { outcome: "completed" });
+	const idle = [userMsg("new prompt")];
+	const idleResult = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(idleResult, undefined, "idle prompt is not framed");
+});
+
+test("steering-frame: batch of two steers frames as one numbered block", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "Also run echo FIVE", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "Include MANGO in the report", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["Also run echo FIVE", "Include MANGO in the report"]))?.messages;
+	const last = result[result.length - 1];
+	assert.match(last.content, /2 messages arrived/);
+	assert.match(last.content, /1\. Also run echo FIVE/);
+	assert.match(last.content, /2\. Include MANGO in the report/);
+});
+test("steering-frame: a steer queued during preparation does not block the delivered batch", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	// A and B are queued and delivered; C is queued after B's delivery (while
+	// the request is being prepared) but before the context hook runs.
+	await ext.fire("input", { text: "steer A", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer B", streamingBehavior: "steer" });
+	transcript.push(userMsg("steer A"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	transcript.push(userMsg("steer B"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	await ext.fire("input", { text: "steer C", streamingBehavior: "steer" });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(result[result.length - 1].content, /steer A/);
+	assert.match(result[result.length - 1].content, /steer B/);
+	assert.doesNotMatch(result[result.length - 1].content, /steer C/, "newer queued steer stays pending");
+	await ext.fire("turn_end", { outcome: "completed" });
+	// Next boundary delivers C alone.
+	const transcript2 = [...transcript, assistantToolMsg(), toolResultMsg("ok2")];
+	const result2 = (await deliverAndPrepare(ext, transcript2, ["steer C"]))?.messages;
+	assert.match(result2[result2.length - 1].content, /1\. steer C/);
+});
+
+test("steering-frame: expanded steer retires at delivery and cannot frame a later follow-up", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "/review", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	// Delivery: the expanded text shares no prefix with the raw "/review".
+	const result = await deliverAndPrepare(ext, transcript, ["Review the whole diff carefully and report findings"]);
+	const delivered = (result?.messages ?? transcript)[transcript.length - 1];
+	assert.doesNotMatch(typeof delivered.content === "string" ? delivered.content : "", /user-steering/, "expanded steer delivers unframed");
+	await ext.fire("turn_end", { outcome: "completed" });
+	// A later follow-up starting with the raw command must NOT be framed.
+	const transcript2 = [...transcript, assistantToolMsg(), toolResultMsg("ok2")];
+	const result2 = await deliverAndPrepare(ext, transcript2, ["/review-notes for the team"]);
+	const delivered2 = (result2?.messages ?? transcript2)[transcript2.length - 1];
+	assert.doesNotMatch(typeof delivered2.content === "string" ? delivered2.content : "", /user-steering/, "no false frame from retired record");
+});
+
+test("steering-frame: image-only steer is framed with a placeholder and preserved blocks", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "", images: [{ type: "image", data: "abc", mimeType: "image/png" }], streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok"), imageOnlyMsg()];
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result[result.length - 1];
+	assert.equal(last.role, "user");
+	assert.match(last.content[0].text, /\(image attachment, no text\)/);
+	assert.equal(last.content.length, 2, "image block preserved after the frame text");
+	assert.equal(last.content[1].type, "image");
+	await ext.fire("turn_end", { outcome: "completed" });
+});
+
+test("steering-frame: image-only steer matches a delivery with appended image-hint text", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "", images: [{ type: "image", data: "abc", mimeType: "image/png" }], streamingBehavior: "steer" });
+	// pi's queued-image normalization appends hint text to an originally
+	// image-only delivery; that text is not user content and must not block
+	// the match.
+	const delivered = {
+		role: "user",
+		content: [
+			{ type: "text", text: "[Image: original 1024x768 resized to 512x512]" },
+			{ type: "image", data: "abc", mimeType: "image/png" },
+		],
+		timestamp: ++steerSeq,
+	};
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok"), delivered];
+	await ext.fire("message_end", { message: delivered });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result[result.length - 1];
+	assert.equal(last.role, "user");
+	assert.match(last.content[0].text, /<user-steering>/);
+	assert.equal(last.content.length, 2, "image block preserved after the frame text");
+	assert.equal(last.content[1].type, "image");
+	assert.equal(ext.status["steer-frame"], undefined, "the record was matched and framed");
+	await ext.fire("turn_end", { outcome: "completed" });
+});
+
+test("steering-frame: steer consumed as a run prompt is dropped by the race guard", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "run the checks", streamingBehavior: "steer" });
+	// The steer became the next run's starting prompt instead of queuing.
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "run the checks" });
+	const idle = [userMsg("run the checks"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(result, undefined, "race-consumed steer is not framed");
+	// And the run prompt itself is untouched even before the turn completes.
+	const withBatch = [userMsg("run the checks"), assistantToolMsg(), toolResultMsg("ok"), userMsg("genuine steer")];
+	await ext.fire("input", { text: "genuine steer", streamingBehavior: "steer" });
+	await ext.fire("message_end", { message: withBatch[withBatch.length - 1] });
+	const result2 = (await ext.fire("context_with_system", { messages: withBatch }))[0]?.messages;
+	assert.match(result2[result2.length - 1].content, /1\. genuine steer/);
+});
+
+test("steering-frame: settle clears pending state so an unrelated prompt is never framed", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer X", streamingBehavior: "steer" });
+	// Abort: pi returns queued messages to the editor; settle fires.
+	await ext.fire("agent_settled", { aborted: true });
+	assert.equal(ext.status["steer-frame"], undefined, "status cleared on settle");
+	const idle = [userMsg("fresh prompt")];
+	const result = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(result, undefined);
+});
+
+test("steering-frame: multi-line steers keep one number with indented continuation", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "first line\nsecond line", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["first line\nsecond line"]))?.messages;
+	const last = result[result.length - 1];
+	assert.match(last.content, /1\. first line\n   second line/);
+});
+
+test("steering-frame: whitespace-only input without images is not recorded", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "   ", streamingBehavior: "steer" });
+	const idle = [userMsg("prompt"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(result, undefined);
+});
+
+test("steering-frame: framing writes consumed records back out of pending", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer A", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer B", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["steer A", "steer B"]))?.messages;
+	assert.match(result[result.length - 1].content, /2 messages arrived/);
+	// Write-back: A and B moved into the frame, so they must have left
+	// `pending` (the stale-pending bug kept the status armed forever).
+	assert.equal(ext.status["steer-frame"], undefined, "framed records are no longer pending");
+	// A steer queued during preparation is then the only pending record.
+	await ext.fire("input", { text: "steer C", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "only the queued steer is pending");
+	await ext.fire("turn_end", {
+		outcome: "completed",
+		message: { role: "assistant", content: [], stopReason: "stop", timestamp: ++steerSeq },
+	});
+	await ext.fire("agent_settled", { aborted: false });
+	const idle = [userMsg("unrelated follow-up")];
+	const idleResult = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(idleResult, undefined, "nothing is framed after the turn");
+	assert.equal(ext.status["steer-frame"], undefined, "status cleared after settle");
+});
+
+test("steering-frame: one framed record cannot match several consecutive user messages", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "/review", streamingBehavior: "steer" });
+	// Tail [user("/review-notes"), user("/review")]: the bound "/review" text
+	// is a prefix of the earlier message, so a record that stays matchable
+	// after consumption would fold "/review-notes" into the frame too.
+	const transcript = [userMsg("task"), userMsg("/review-notes"), userMsg("/review")];
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.equal(result.length, transcript.length, "the single steer folds into one message");
+	const last = result[result.length - 1];
+	assert.match(last.content, /1\. \/review/);
+	assert.doesNotMatch(last.content, /\/review-notes/, "prefix-related earlier message is not folded in");
+	assert.equal(ext.status["steer-frame"], undefined, "the record left pending with the frame");
+});
+
+test("steering-frame: retry re-frames from framed records, and a normal completion clears them", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer R", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["steer R"]))?.messages;
+	assert.match(result[result.length - 1].content, /1\. steer R/);
+	assert.equal(ext.status["steer-frame"], undefined, "proven via framed: nothing left pending");
+	// Retryable error: framed records survive the turn.
+	await ext.fire("turn_end", {
+		outcome: "error",
+		message: { role: "assistant", content: [], stopReason: "error", timestamp: ++steerSeq },
+	});
+	// Fresh run: framing must come from `framed`, not stale pending records.
+	await ext.fire("agent_start", {});
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(retry[retry.length - 1].content, /<user-steering>/, "retry re-frames the same batch");
+	// A normal completion (non-length stop reason) drops them.
+	await ext.fire("turn_end", {
+		outcome: "completed",
+		message: { role: "assistant", content: [], stopReason: "stop", timestamp: ++steerSeq },
+	});
+	const idle = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(idle, undefined, "unframed after a normal completion");
+});
+
+test("steering-frame: a length-capped response keeps framed records for the compact-and-retry pass", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer L", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["steer L"]))?.messages;
+	assert.match(result[result.length - 1].content, /1\. steer L/);
+	// pi reports a length-capped assistant response as outcome "completed"
+	// with stopReason "length"; the records must survive the later retry.
+	await ext.fire("turn_end", {
+		outcome: "completed",
+		message: { role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "length", timestamp: ++steerSeq },
+	});
+	// The retry is a fresh run: framing must come from `framed` even after a
+	// new agent_start resets the run state.
+	await ext.fire("agent_start", {});
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(retry[retry.length - 1].content, /<user-steering>/, "length completion keeps the records");
+	// Without a recovery the settle clears them.
+	await ext.fire("agent_settled", { aborted: false });
+	const idle = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(idle, undefined, "settle clears the retained records");
+});
+
+test("steering-frame: pre-assistant deliveries correlate; only the run's own prompt is skipped", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	// A steer typed right at run start is recorded and drained before any
+	// assistant message exists.
+	await ext.fire("input", { text: "check the logs first", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), userMsg("check the logs first")];
+	// The run's own prompt is not a delivery: it must be skipped without
+	// retiring the armed record.
+	await ext.fire("message_end", { message: transcript[0] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "run prompt did not retire the record");
+	// The pre-assistant steer delivery correlates like any delivery.
+	await ext.fire("message_end", { message: transcript[1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.equal(result.length, transcript.length, "the steer folds into one frame message");
+	const last = result[result.length - 1];
+	assert.match(last.content, /1\. check the logs first/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "the record left pending with the frame");
+});
+
+test("steering-frame: an expanded steer delivered pre-assistant still retires at delivery", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	await ext.fire("input", { text: "/review", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), userMsg("Review the whole diff carefully and report findings")];
+	// The run prompt arrives first (skipped positionally), then the expanded
+	// delivery matches nothing and must retire the record even before any
+	// assistant message — otherwise it stays armed and can falsely frame a
+	// follow-up.
+	await ext.fire("message_end", { message: transcript[0] });
+	await ext.fire("message_end", { message: transcript[1] });
+	// Retirement must already be observable BEFORE any settle clears state:
+	// the pending count dropped to zero.
+	assert.equal(ext.status["steer-frame"], undefined, "record retired at delivery, before settlement");
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(result, undefined, "expanded steer delivers unframed");
+	// Still before any settle: a later follow-up that prefix-matches the raw
+	// text must NOT resurrect the retired record as steering.
+	transcript.push(userMsg("/review-notes for the team"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result2 = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(result2, undefined, "no false frame from a record retired pre-assistant");
+	await ext.fire("agent_settled", { aborted: false });
+	assert.equal(ext.status["steer-frame"], undefined, "status stays cleared after settle");
+});
+
+test("steering-frame: run prompt with appended image hints is skipped positionally", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	await ext.fire("input", { text: "check the logs first", streamingBehavior: "steer" });
+	// pi builds the starting message as `prompt + "\n\n" + image hints`, so
+	// exact text equality would fail and FIFO-retire the armed steer.
+	const transcript = [
+		userMsg("task\n\n[Image: original 1024x768 resized to 512x512]"),
+		userMsg("check the logs first"),
+	];
+	await ext.fire("message_end", { message: transcript[0] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "run prompt with hints did not retire the record");
+	// The pre-assistant steer delivery correlates like any delivery.
+	await ext.fire("message_end", { message: transcript[1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.equal(result.length, transcript.length, "the steer folds into one frame message");
+	const last = result[result.length - 1];
+	assert.match(last.content, /1\. check the logs first/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.doesNotMatch(last.content, /Image: original/, "generated image hints are not framed");
+});
+
+test("steering-frame: the positional guard is consumed by the first user message even post-assistant", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	// Pathological ordering: an assistant message_end lands before the run
+	// prompt's own message_end. The guard is still consumed by the first user
+	// message_end, but correlation proceeds — no skip happens.
+	await ext.fire("message_end", { message: assistantToolMsg() });
+	await ext.fire("input", { text: "steer S", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), userMsg("steer S")];
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(result[result.length - 1].content, /1\. steer S/, "post-assistant first user message correlates normally");
+});
+
+test("steering-frame: continuation agent_start does not arm the prompt-skip guard", async () => {
+	const ext = await loadSteeringFrame();
+	// Continuation: agent_start fires without a fresh before_agent_start.
+	await ext.fire("agent_start", {});
+	await ext.fire("input", { text: "/review", streamingBehavior: "steer" });
+	const transcript = [userMsg("Review the whole diff carefully and report findings")];
+	// Pre-assistant delivery with no guard armed: the expanded delivery is a
+	// genuine delivery, so it must retire the record rather than be skipped
+	// as a run prompt (a wrongly-armed guard would leave the status armed).
+	await ext.fire("message_end", { message: transcript[0] });
+	assert.equal(ext.status["steer-frame"], undefined, "no guard armed: the delivery retired the record");
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(result, undefined, "expanded steer delivers unframed");
+	// Correlation still works on the continuation for a matching delivery.
+	await ext.fire("input", { text: "steer C", streamingBehavior: "steer" });
+	transcript.push(userMsg("steer C"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result2 = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(result2[result2.length - 1].content, /1\. steer C/, "pre-assistant delivery binds and frames on a continuation");
+});
+
+test("steering-frame: a stale guard with empty pending is consumed and cannot skip a later pre-assistant delivery", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	// steer1 is recorded, then consumed as the next run's prompt by the race
+	// guard: pending is now empty and the prompt-skip guard is armed.
+	await ext.fire("input", { text: "steer1Text", streamingBehavior: "steer" });
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "steer1Text" });
+	assert.equal(ext.status["steer-frame"], undefined, "race guard removed the only record");
+	await ext.fire("agent_start", {});
+	// pi emits the starting prompt BEFORE its initial steering-queue drain, and
+	// the hint-bearing text never matches the raw prompt: the guard must be
+	// consumed here even though pending is empty.
+	const promptMsg = userMsg("steer1Text\n\n[Image: original resized]");
+	await ext.fire("message_end", { message: promptMsg });
+	assert.equal(ext.status["steer-frame"], undefined, "pending stays untouched by the run prompt");
+	// A later pre-assistant expanded delivery must NOT be skipped by the stale
+	// guard: it is unmatched, so it retires the record (status cleared). Under
+	// the old ordering the guard survived the empty-pending prompt delivery and
+	// wrongly skipped this one, leaving the status armed.
+	await ext.fire("input", { text: "steer2Text", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "steer2 is pending before its delivery");
+	const expanded = userMsg("Steer two expanded into completely different wording");
+	await ext.fire("message_end", { message: expanded });
+	assert.equal(ext.status["steer-frame"], undefined, "stale guard did not skip: the unmatched delivery retired steer2");
+});
+
+test("steering-frame: a mixed delivery binds to its own text record, not a newer image-only record", async () => {
+	for (const reverse of [false, true]) {
+		const ext = await loadSteeringFrame();
+		await runStarted(ext);
+		// A: text+image (older), B: image-only (newer).
+		await ext.fire("input", { text: "look at this chart", images: [{ type: "image", data: "aaa", mimeType: "image/png" }], streamingBehavior: "steer" });
+		await ext.fire("input", { text: "", images: [{ type: "image", data: "bbb", mimeType: "image/png" }], streamingBehavior: "steer" });
+		assert.equal(ext.status["steer-frame"], "⇡ 2 steered");
+		const mixed = {
+			role: "user",
+			content: [{ type: "text", text: "look at this chart" }, { type: "image", data: "aaa", mimeType: "image/png" }],
+			timestamp: ++steerSeq,
+		};
+		const imageOnly = {
+			role: "user",
+			content: [
+				{ type: "text", text: "[Image: original 1024x768 resized to 512x512]" },
+				{ type: "image", data: "bbb", mimeType: "image/png" },
+			],
+			timestamp: ++steerSeq,
+		};
+		const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+		const deliveries = reverse ? [imageOnly, mixed] : [mixed, imageOnly];
+		for (const delivery of deliveries) {
+			transcript.push(delivery);
+			await ext.fire("message_end", { message: delivery });
+		}
+		// Neither delivery may retire a record: both must bind.
+		assert.equal(ext.status["steer-frame"], "⇡ 2 steered", `no record retired (${reverse ? "reverse" : "fifo"} order)`);
+		const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+		const last = result[result.length - 1];
+		// Both deliveries are adjacent and matched: one merged frame containing
+		// A's text and both image blocks.
+		assert.match(last.content[0].text, /<user-steering>/);
+		assert.match(last.content[0].text, /look at this chart/, "A's text is framed");
+		assert.equal(last.content.length, 3, "both image blocks preserved after the frame text");
+		// Images are collected in transcript order (oldest first).
+		assert.equal(last.content[1].data, reverse ? "bbb" : "aaa");
+		assert.equal(last.content[2].data, reverse ? "aaa" : "bbb");
+		assert.equal(ext.status["steer-frame"], undefined, "both records consumed into the frame");
+		await ext.fire("agent_settled", { aborted: false });
+	}
+});
+
+test("steering-frame: a bound record survives an unmatched delivery and is framed despite the interleaved gap", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	// A is a normal steer; B is recorded but delivered as expanded text with no
+	// prefix relation to anything.
+	await ext.fire("input", { text: "steer A normal", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer B raw", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	transcript.push(userMsg("steer A normal"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const expandedB = userMsg("Steer B expanded into entirely different wording");
+	transcript.push(expandedB);
+	await ext.fire("message_end", { message: expandedB });
+	// B's unmatched delivery must retire B (the oldest UNBOUND record), never
+	// the already-bound A.
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "bound A survives; unbound B was retired");
+	// The context walk must frame A even though the unmatched B sits between it
+	// and the transcript tail.
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.equal(result.length, transcript.length, "no message is dropped or merged away");
+	const last = result[result.length - 1];
+	assert.doesNotMatch(typeof last.content === "string" ? last.content : "", /user-steering/, "the unmatched expanded steer stays raw");
+	const framedMsg = result[result.length - 2];
+	assert.match(framedMsg.content, /<user-steering>/);
+	assert.match(framedMsg.content, /1\. steer A normal/, "A is framed despite the gap");
+	assert.doesNotMatch(framedMsg.content, /Steer B expanded/, "B's text never enters the frame");
+	assert.equal(ext.status["steer-frame"], undefined, "A was consumed into the frame");
+	await ext.fire("turn_end", { outcome: "completed" });
+	// After completion the next unrelated prompt is unframed.
+	const idle = [userMsg("next unrelated prompt")];
+	const idleResult = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(idleResult, undefined, "nothing frames after the turn completes");
+});
+
+// FINDING 1a: a steer queued during tool execution must survive the tool
+// result's message_end (non-user roles never correlate or retire records).
+test("steering-frame: a toolResult message_end neither retires nor consumes pending steers", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	const transcript = [userMsg("task"), assistantToolMsg()];
+	// Steer queued while the run executes a tool.
+	await ext.fire("input", { text: "also check the logs", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered");
+	// The tool result's message_end fires; before the role guard it fell through
+	// to the retirement rule and silently dropped the steer.
+	transcript.push(toolResultMsg("ok"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "toolResult did not retire the steer");
+	// The steer's real delivery still binds and frames.
+	const result = await deliverAndPrepare(ext, transcript, ["also check the logs"]);
+	const last = (result?.messages ?? [])[result.messages.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. also check the logs/);
+	assert.equal(ext.status["steer-frame"], undefined, "steer framed and consumed");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING 1b: a system message preceding the run prompt must not consume the
+// prompt-skip guard; the guard is consumed by the first USER message_end.
+test("steering-frame: a system message never consumes the prompt guard or retires records", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	await ext.fire("input", { text: "check the logs first", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered");
+	// A system message fires message_end before the run prompt; it must be
+	// ignored entirely (pre-fix it consumed the guard, so the actual run prompt
+	// was then treated as a delivery and could bind/retire the record).
+	await ext.fire("message_end", { message: { role: "system", content: "injected context", timestamp: ++steerSeq } });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "system message did not touch pending");
+	// The guard is still armed, so the run prompt is skipped positionally.
+	const transcript = [userMsg("task\n\n[Image: original 1024x768 resized to 512x512]")];
+	await ext.fire("message_end", { message: transcript[0] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "guard consumed by the user prompt: record untouched");
+	// A subsequent genuine steer delivery binds and frames normally.
+	const result = await deliverAndPrepare(ext, transcript, ["check the logs first"]);
+	const last = (result?.messages ?? [])[result.messages.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. check the logs first/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "steer framed and consumed");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING 2: with FIFO steers A = "steer alpha" then B = "steer", A's delivery
+// prefix-matches BOTH records; the oldest-unbound scan must bind A (a
+// newest-first scan let B steal it and left A to be retired by B's delivery).
+test("steering-frame: prefix-related steers each bind their own delivery (oldest unbound wins)", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer alpha", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered");
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	// A's delivery: binds the oldest unbound record (A itself), retiring nothing.
+	transcript.push(userMsg("steer alpha"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "A's delivery bound A, retiring nothing");
+	// B's delivery: must still bind B (pre-fix it matched nothing and the
+	// unmatched-delivery rule retired the already-bound A).
+	transcript.push(userMsg("steer"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "B's delivery bound B, retiring nothing");
+	// Both adjacent deliveries fold into one merged frame, oldest to newest.
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result[result.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. steer alpha/);
+	assert.match(last.content, /2\. steer/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "both records consumed into the frame");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING (reversed deliveries): recording order is not guaranteed to equal
+// delivery order. With A = "steer" recorded before B = "steer alpha" but
+// delivered B-first, prefix matching alone binds B's delivery to A (A's
+// shorter text prefix-matches the longer message) and overwrites A's text;
+// A's real delivery then matches nothing and retirement removes B. The exact
+// tier first lets each delivery bind its own record.
+test("steering-frame: reversed deliveries of prefix-related steers each bind their own record", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	// Recording order: A = "steer", then B = "steer alpha".
+	await ext.fire("input", { text: "steer", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer alpha", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered");
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	// Delivery order is REVERSED: B first, then A.
+	transcript.push(userMsg("steer alpha"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "B's delivery exact-matched B; nothing retired");
+	transcript.push(userMsg("steer"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "A's delivery exact-matched A; nothing retired");
+	// Both adjacent deliveries fold into one merged frame, in transcript
+	// order (B's message was appended first).
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result[result.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /^1\. steer alpha$/m);
+	assert.match(last.content, /^2\. steer$/m);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "both records consumed into the frame");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING (retry re-frame): initial framing consumes records newest-first, so
+// `framed` can hold [B("steer alpha"), A("steer")]. On the retry walk, A's
+// shorter text prefix-matches B's message; without the exact tier A would be
+// consumed for B's message and A's own message would stay raw.
+test("steering-frame: retry re-frames prefix-related steers without stealing each other's messages", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	// Recording and delivery order: A = "steer", then B = "steer alpha".
+	await ext.fire("input", { text: "steer", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer alpha", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = await deliverAndPrepare(ext, transcript, ["steer", "steer alpha"]);
+	assert.match(result.messages[result.messages.length - 1].content, /^1\. steer$/m);
+	assert.match(result.messages[result.messages.length - 1].content, /^2\. steer alpha$/m);
+	assert.equal(ext.status["steer-frame"], undefined, "both records framed");
+	// Retryable error: framed records survive the turn.
+	await ext.fire("turn_end", {
+		outcome: "error",
+		message: { role: "assistant", content: [], stopReason: "error", timestamp: ++steerSeq },
+	});
+	await ext.fire("agent_start", {});
+	// The retry's context_with_system sees the same tail; BOTH messages must
+	// still be framed (pre-fix the retry walk mis-bound A's record to B's
+	// message and left A's message raw).
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const retryLast = retry[retry.length - 1];
+	assert.match(retryLast.content, /<user-steering>/);
+	assert.match(retryLast.content, /^1\. steer$/m);
+	assert.match(retryLast.content, /^2\. steer alpha$/m);
+	assert.equal(retry.length, transcript.length - 1, "both steers re-framed into one merged message; none left raw");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING 3: an undelivered (unbound) steer must not frame the run prompt;
+// it stays pending until its real delivery, then frames normally.
+test("steering-frame: an undelivered steer cannot frame the run prompt and survives pending", async () => {
+	const ext = await loadSteeringFrame();
+	// The run prompt is emitted and its guard consumed.
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "fix the bug" });
+	await ext.fire("agent_start", {});
+	const transcript = [userMsg("fix the bug")];
+	await ext.fire("message_end", { message: transcript[0] });
+	// Steer "fix" queued during asynchronous request preparation: recorded but
+	// undelivered (unbound). It prefix-matches the run prompt, so a walk that
+	// allowed unbound records would frame the RUN PROMPT as steering.
+	await ext.fire("input", { text: "fix", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered");
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(result, undefined, "the unbound steer did not frame the run prompt");
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "the unbound record is still pending");
+	// The steer's real delivery binds it; the next walk frames it.
+	transcript.push(userMsg("fix"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result2 = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result2[result2.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. fix/);
+	assert.doesNotMatch(last.content, /fix the bug/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "the steer was consumed into the frame");
+	await ext.fire("agent_settled", { aborted: false });
 });
