@@ -4,6 +4,9 @@
 
 Include ~/.colima/ssh_config
 
+# Private hosts (real IPs/users) — untracked, machine-local
+Include ~/.ssh/config.private
+
 # Work GitHub (HF Thinkpad key)
 Host github.com-work
     HostName github.com
