@@ -14,6 +14,26 @@
  * user messages, so history, export and display are untouched. Only what the
  * model sees changes (via the `context_with_system` hook).
  *
+ * Correlation model (how recorded inputs meet delivered messages):
+ *
+ * - `input` (streamingBehavior "steer") records `{ text, hasImages }` in
+ *   arrival order. Text is raw, before skill/template expansion.
+ * - `message_end` for a user message that arrives after the run's first
+ *   assistant message is a native queue delivery (the run's own prompt fires
+ *   before any assistant message and is excluded). Deliveries are FIFO, so:
+ *   a delivery that prefix-matches a pending record binds to it (the record's
+ *   text is updated to the final delivered text); a delivery that matches
+ *   nothing retires the oldest pending record — its delivery window has
+ *   passed, and leaving it armed could falsely frame a later follow-up.
+ *   Expanded skill/template steers therefore deliver unframed (benign).
+ * - `context_with_system` walks the transcript tail backwards, matching user
+ *   messages against pending records plus `framed` records (see retry below),
+ *   and folds the matched run into one framed user message.
+ * - Matched records move to `framed` and stay there until `turn_end` reports
+ *   `outcome: "completed"`. If pi retries the request after a retryable error,
+ *   the retry's `context_with_system` re-frames the same batch instead of
+ *   sending it raw. Settle and session start clear everything.
+ *
  * Not implemented (on purpose): queue editing (↑). Pi's extension API does not
  * expose queue manipulation, so editing would require the extension to own the
  * whole queue, including abort behavior and skill/template expansion.
@@ -22,9 +42,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
-interface PendingSteer {
-	/** Raw text as typed, before skill/template expansion. */
+interface SteerRecord {
+	/** Recorded text; for bound records, the final delivered text. */
 	text: string;
+	/** Whether the steered input carried images. */
+	hasImages: boolean;
 }
 
 function messageText(message: AgentMessage): string {
@@ -45,15 +67,21 @@ function messageImages(message: AgentMessage) {
 }
 
 /**
- * Does the delivered transcript message correspond to a raw steer text?
- * Skill/template expansion can change the text, so this is a prefix check on
- * the trimmed text and may legitimately fail for expanded messages. A failed
- * match is safe: that message just stays unframed.
+ * Does a delivered transcript message correspond to a steer record? Text is
+ * compared as a trimmed prefix in either direction-safe form; skill/template
+ * expansion can change the text, which is why unmatchable deliveries retire
+ * the oldest record instead of sticking around. An image-only record matches
+ * a delivered message that has images and no text.
  */
-function matchesSteer(delivered: string, raw: string): boolean {
-	const deliveredTrimmed = delivered.trimStart();
-	const rawTrimmed = raw.trim();
-	if (rawTrimmed.length === 0) return false;
+function matchesRecord(deliveredMessage: AgentMessage, record: SteerRecord): boolean {
+	const text = messageText(deliveredMessage);
+	const hasImages = messageImages(deliveredMessage).length > 0;
+	const rawTrimmed = record.text.trim();
+	if (rawTrimmed.length === 0) {
+		return record.hasImages && hasImages && text.trim().length === 0;
+	}
+	if (text.trim().length === 0) return false;
+	const deliveredTrimmed = text.trimStart();
 	return (
 		deliveredTrimmed.startsWith(rawTrimmed) ||
 		deliveredTrimmed.startsWith(rawTrimmed.replace(/\s+/g, " "))
@@ -62,7 +90,6 @@ function matchesSteer(delivered: string, raw: string): boolean {
 
 function buildFrame(messages: AgentMessage[]): string {
 	const lines: string[] = [];
-	const texts = messages.map((m) => messageText(m).trim()).filter((t) => t.length > 0);
 	const count = messages.length;
 	lines.push("<user-steering>");
 	lines.push(
@@ -72,27 +99,28 @@ function buildFrame(messages: AgentMessage[]): string {
 	lines.push("- Adjust your plan or approach if the messages require it.");
 	lines.push("- Continue the current task unless a message says otherwise.");
 	lines.push("");
-	if (texts.length === 0) {
-		// Defensive: a matched message always has text (matching requires a
-		// non-empty prefix), so this only guards a future refactor that loosens
-		// the match. Image blocks are appended to the framed message separately.
-		lines.push("(The messages carried no text content.)");
-	} else {
-		lines.push("Messages:");
-		texts.forEach((text, i) => {
-			const body = text.split("\n");
-			body.forEach((line, j) => {
-				lines.push(j === 0 ? `${i + 1}. ${line}` : `   ${line}`);
-			});
+	lines.push("Messages:");
+	messages.forEach((message, i) => {
+		const text = messageText(message).trim();
+		const body = text.length > 0 ? text.split("\n") : ["(image attachment, no text)"];
+		body.forEach((line, j) => {
+			lines.push(j === 0 ? `${i + 1}. ${line}` : `   ${line}`);
 		});
-	}
+	});
 	lines.push("</user-steering>");
 	return lines.join("\n");
 }
 
 export default function steeringFrameExtension(pi: ExtensionAPI): void {
-	/** Steered inputs awaiting delivery, in arrival order. */
-	let pending: PendingSteer[] = [];
+	/** Steered inputs awaiting native delivery, in arrival order. */
+	let pending: SteerRecord[] = [];
+	/**
+	 * Records already folded into a frame on the current request, kept until
+	 * the turn completes so an automatic retry re-frames the same batch.
+	 */
+	let framed: SteerRecord[] = [];
+	/** Whether the current run has produced an assistant message yet. */
+	let runSawAssistant = false;
 
 	function updateStatus(ctx: ExtensionContext): void {
 		if (pending.length > 0) {
@@ -107,7 +135,10 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 
 	pi.on("input", async (event, ctx) => {
 		if (event.streamingBehavior !== "steer") return;
-		pending.push({ text: event.text });
+		const hasImages = (event.images?.length ?? 0) > 0;
+		const text = event.text;
+		if (text.trim().length === 0 && !hasImages) return;
+		pending.push({ text, hasImages });
 		updateStatus(ctx);
 	});
 
@@ -126,33 +157,76 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("context_with_system", async (event, ctx) => {
-		if (pending.length === 0) return;
-		const messages = event.messages;
+	pi.on("agent_start", async () => {
+		runSawAssistant = false;
+	});
 
-		// Walk backwards from the end, matching the trailing run of user
-		// messages against the recorded steers in reverse arrival order.
-		const reversed = [...pending].reverse();
-		let matchedCount = 0;
-		while (matchedCount < messages.length && matchedCount < reversed.length) {
-			const message = messages[messages.length - 1 - matchedCount];
-			if (message.role !== "user") break;
-			if (!matchesSteer(messageText(message), reversed[matchedCount].text)) break;
-			matchedCount++;
-		}
-		if (matchedCount === 0) {
-			// Nothing at the tail corresponds to what we recorded. Leave the
-			// flag armed: the boundary where the batch is delivered has not
-			// happened yet (for example, delivery into the next run).
+	pi.on("message_end", async (event) => {
+		const message = event.message;
+		if (message.role === "assistant") {
+			runSawAssistant = true;
 			return;
 		}
+		// Correlate native queue deliveries (user messages appended after the
+		// run's first assistant message) with pending records.
+		if (message.role !== "user" || !runSawAssistant || pending.length === 0) return;
+
+		const boundIdx = pending.findLastIndex((record) => matchesRecord(message, record));
+		if (boundIdx >= 0) {
+			// Bind: remember the final delivered text so the context-time match
+			// is exact even when skill/template expansion changed the wording.
+			const record = pending[boundIdx];
+			record.text = messageText(message);
+			record.hasImages = messageImages(message).length > 0 || record.hasImages;
+			return;
+		}
+		// FIFO: this delivery just arrived, so every older pending record was
+		// delivered before it and missed its framing window. Retire the oldest
+		// one (typically a skill/template-expanded steer). If the delivery
+		// actually belonged to another extension's injected message, retiring
+		// one record is still the benign direction: a later delivery then goes
+		// out unframed rather than a follow-up being falsely framed.
+		pending.shift();
+	});
+
+	pi.on("context_with_system", async (event, ctx) => {
+		if (pending.length === 0 && framed.length === 0) return;
+		const messages = event.messages;
+
+		// Walk backwards from the end. Each trailing user message is matched
+		// against the newest unconsumed record: pending records first (they
+		// are newer), then framed records. A steer queued while the batch was
+		// being prepared stays pending untouched, because the tail simply runs
+		// out of matching messages before reaching it.
+		const pool = [...pending];
+		let matchedCount = 0;
+		while (matchedCount < messages.length && pool.length + framed.length > 0) {
+			const message = messages[messages.length - 1 - matchedCount];
+			if (message.role !== "user") break;
+
+			let poolIdx = pool.findLastIndex((record) => matchesRecord(message, record));
+			if (poolIdx >= 0) {
+				// Consumed into the current frame; keep a copy in `framed` for
+				// retry safety.
+				framed.push(...pool.splice(poolIdx, 1));
+			} else {
+				const framedIdx = framed.findLastIndex((record) => matchesRecord(message, record));
+				if (framedIdx < 0) break;
+			}
+			matchedCount++;
+		}
+		if (matchedCount === 0) return;
+
+		// Retirement of delivered-but-unmatched records is handled by the
+		// message_end correlation above (FIFO: an unmatched delivery retires
+		// the oldest pending record), so nothing extra is needed here.
 
 		const start = messages.length - matchedCount;
 		const batch = messages.slice(start);
 		const images = batch.flatMap((m) => messageImages(m));
 		const frame = buildFrame(batch);
 
-		const framed: AgentMessage =
+		const framedMessage: AgentMessage =
 			images.length === 0
 				? { role: "user", content: frame, timestamp: Date.now() }
 				: {
@@ -161,23 +235,34 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 						timestamp: Date.now(),
 					};
 
-		const next = [...messages.slice(0, start), framed];
-		pending = pending.slice(0, pending.length - matchedCount);
+		const next = [...messages.slice(0, start), framedMessage];
 		updateStatus(ctx);
 		return { messages: next };
 	});
 
-	// Abort returns queued messages to the editor natively; a stale record must
+	// A completed turn proves the framed request reached the model; drop its
+	// records. Non-completed outcomes keep them so an automatic retry (which
+	// re-invokes context_with_system with the same tail) re-frames the batch.
+	pi.on("turn_end", async (event) => {
+		if (event.outcome === "completed" && framed.length > 0) {
+			framed = [];
+		}
+	});
+
+	// Abort returns queued messages to the editor natively; stale records must
 	// never frame an unrelated future prompt. Settled also covers the normal
-	// end of a run, clearing any leftovers that were handled but never matched.
+	// end of a run, clearing any leftovers.
 	pi.on("agent_settled", async (_event, ctx) => {
-		if (pending.length === 0) return;
+		if (pending.length === 0 && framed.length === 0) return;
 		pending = [];
+		framed = [];
 		updateStatus(ctx);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		pending = [];
+		framed = [];
+		runSawAssistant = false;
 		updateStatus(ctx);
 	});
 }
