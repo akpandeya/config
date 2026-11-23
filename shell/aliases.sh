@@ -109,7 +109,7 @@ if [ -n "$ZSH_VERSION" ]; then
     # Run once at startup/sourcing
     update_gemini_skills
 
-    # dev: fuzzy repo picker + AI harness launcher (dev/cc/oc/pc + repo
+    # dev: fuzzy repo picker + AI harness launcher (dev/cc/oc/pc/ppc/pwc + repo
     # shortcuts defined in dev-shortcuts.conf). zsh only.
     _aliases_dir="${${(%):-%x}:A:h}"
     [ -f "$_aliases_dir/dev.sh" ] && source "$_aliases_dir/dev.sh"

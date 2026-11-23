@@ -7,6 +7,8 @@
 #                   enter asks for a harness, ctrl-o = opencode,
 #                   ctrl-c = Claude Code, ctrl-p = Pi, ctrl-n = nvim.
 #   pc [target]     Pi (pi)
+#   ppc [target]    Pi scoped to the personal profile (memory + instructions)
+#   pwc [target]    Pi scoped to the work profile (memory + instructions)
 #   cc [target]     Claude Code (claude --dangerously-skip-permissions)
 #   oc [target]     opencode (opencode --auto)
 #   nv [target]     nvim
@@ -145,8 +147,11 @@ _dev_launch() {
         opencode) opencode --auto "$@" ;;
         claude)   claude --dangerously-skip-permissions "$@" ;;
         pi)       command pi "$@" ;;
+        pi-personal|pi-work)
+            local launcher_dir="$(_dev_dir)"
+            "${launcher_dir:h}/agents/bin/${harness}" "$@" ;;
         nvim)     nvim "$@" ;;
-        *) echo "dev: unknown harness '$harness' (expected opencode, claude, pi or nvim)" >&2; return 1 ;;
+        *) echo "dev: unknown harness '$harness' (expected opencode, claude, pi, nvim, pi-personal or pi-work)" >&2; return 1 ;;
     esac
 }
 
@@ -290,6 +295,37 @@ oc() { _dev_go opencode "$@"; }
 pc() { _dev_go pi "$@"; }
 nv() { _dev_go nvim "$@"; }
 
+# ppc/pwc [target]: Pi scoped to the personal/work profile via the agent-profile
+# launcher (memory + scoped instructions; agent-profile validates that the
+# target sits under the matching code group). Same target resolution and
+# flag passthrough as pc: `ppc mem --resume`.
+_dev_go_profiled() {
+    local profile="$1"
+    shift
+    local -a query_parts flags
+    query_parts=()
+    flags=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -*) flags+=("$@"); break ;;
+            *)  query_parts+=("$1"); shift ;;
+        esac
+    done
+    if [ ${#query_parts[@]} -eq 0 ]; then
+        # No target: launch in the current directory; the launcher checks scope.
+        local launcher_dir="$(_dev_dir)"
+        "${launcher_dir:h}/agents/bin/pi-$profile" "${flags[@]}"
+        return
+    fi
+    local rel
+    rel="$(_dev_resolve "${query_parts[*]}")" || return 1
+    if [ -z "$rel" ]; then return 1; fi
+    echo "dev: -> $(_dev_code_root)/$rel"
+    _dev_launch "pi-$profile" "$(_dev_code_root)/$rel" "${flags[@]}"
+}
+ppc() { _dev_go_profiled personal "$@"; }
+pwc() { _dev_go_profiled work "$@"; }
+
 # pys [template] [name]: open this project's python scratch directly in nvim
 # (:PyScratch) — `pys`, `pys sql`, `pys sql foo`. Template names win; other
 # args go to :PyScratchAll for cross-project access. Run from inside the
@@ -395,7 +431,7 @@ _dev_define_shortcuts() {
     while IFS=$'\t' read -r name rpath harness; do
         if [ -z "$name" ]; then continue; fi
         case "$name" in
-            dev|cc|oc|pc|pi|nv|fcd|pys|jss)
+            dev|cc|oc|pc|ppc|pwc|pi|nv|fcd|pys|jss)
                 echo "dev: shortcut '$name' ignored (reserved name)" >&2
                 continue
                 ;;
