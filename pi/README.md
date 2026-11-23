@@ -45,6 +45,7 @@ up changes in a running session).
 | `dynamic-tools.ts` | *linked*. Runtime tool registration: adds `echo_session` tool at session start and `/add-echo-tool <name>` command. Adapt it to register tools you actually want |
 | `rtk.ts` | *linked*. Rewrites bash commands through the `rtk` CLI for token savings; needs `rtk` >= 0.23 in PATH (`brew-packages.txt` installs it). No-ops when `rtk` is missing |
 | `ask-user.ts` | *linked*. `ask_user` tool: Claude Code-style multi-question dialog with options, multi-select and free-text "Other" |
+| `steering-frame.ts` | *linked*. Frames mid-run steering: messages typed while the agent runs (queued natively by `steeringMode: "all"`) are folded into one `<user-steering>` block at the next LLM call — "treat as mid-task course corrections" — so the model reads the batch as guidance instead of bare user turns. Request-only: the transcript keeps the raw messages. Inspired by the `pi-cc-steer` package, reimplemented locally instead of installing it |
 | `keybindings.json` | Linked to `~/.pi/agent/keybindings.json`. Six overrides: `app.thinking.cycle` → `Alt+T` (freeing `Shift+Tab` for plan-mode), `app.session.new` → `Ctrl+Shift+N`, `app.session.resume` → `Ctrl+Shift+R`, `app.session.tree` → `Ctrl+Shift+T`, `tui.altScreen.halfPageUp` → `Alt+U`, `tui.altScreen.halfPageDown` → `Alt+D` |
 | `themes/matrix-dark.json` | Linked to `~/.pi/agent/themes/matrix-dark.json`; `settings.json`'s theme setting selects it |
 | `mcp/ddg-search/` | Local DuckDuckGo web-search MCP server (see below) |
@@ -318,7 +319,9 @@ Local deviations from upstream:
   Message queueing: `steeringMode` and `followUpMode` are set to `"all"` in
   `~/.pi/agent/settings.json` — messages typed while the agent runs are drained
   as one batch into the next request (pi's default `one-at-a-time` burned a
-  full-context turn per queued message).
+  full-context turn per queued message). `steering-frame.ts` adds the framing
+  layer on top: the drained batch reaches the model wrapped in a
+  `<user-steering>` block.
 
 Everything else is upstream. If you customize further, note it here.
 
