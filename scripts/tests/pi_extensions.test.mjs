@@ -1203,3 +1203,112 @@ test("steering-frame: a bound record survives an unmatched delivery and is frame
 	const idleResult = (await ext.fire("context_with_system", { messages: idle }))[0];
 	assert.equal(idleResult, undefined, "nothing frames after the turn completes");
 });
+
+// FINDING 1a: a steer queued during tool execution must survive the tool
+// result's message_end (non-user roles never correlate or retire records).
+test("steering-frame: a toolResult message_end neither retires nor consumes pending steers", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	const transcript = [userMsg("task"), assistantToolMsg()];
+	// Steer queued while the run executes a tool.
+	await ext.fire("input", { text: "also check the logs", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered");
+	// The tool result's message_end fires; before the role guard it fell through
+	// to the retirement rule and silently dropped the steer.
+	transcript.push(toolResultMsg("ok"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "toolResult did not retire the steer");
+	// The steer's real delivery still binds and frames.
+	const result = await deliverAndPrepare(ext, transcript, ["also check the logs"]);
+	const last = (result?.messages ?? [])[result.messages.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. also check the logs/);
+	assert.equal(ext.status["steer-frame"], undefined, "steer framed and consumed");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING 1b: a system message preceding the run prompt must not consume the
+// prompt-skip guard; the guard is consumed by the first USER message_end.
+test("steering-frame: a system message never consumes the prompt guard or retires records", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	await ext.fire("input", { text: "check the logs first", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered");
+	// A system message fires message_end before the run prompt; it must be
+	// ignored entirely (pre-fix it consumed the guard, so the actual run prompt
+	// was then treated as a delivery and could bind/retire the record).
+	await ext.fire("message_end", { message: { role: "system", content: "injected context", timestamp: ++steerSeq } });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "system message did not touch pending");
+	// The guard is still armed, so the run prompt is skipped positionally.
+	const transcript = [userMsg("task\n\n[Image: original 1024x768 resized to 512x512]")];
+	await ext.fire("message_end", { message: transcript[0] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "guard consumed by the user prompt: record untouched");
+	// A subsequent genuine steer delivery binds and frames normally.
+	const result = await deliverAndPrepare(ext, transcript, ["check the logs first"]);
+	const last = (result?.messages ?? [])[result.messages.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. check the logs first/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "steer framed and consumed");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING 2: with FIFO steers A = "steer alpha" then B = "steer", A's delivery
+// prefix-matches BOTH records; the oldest-unbound scan must bind A (a
+// newest-first scan let B steal it and left A to be retired by B's delivery).
+test("steering-frame: prefix-related steers each bind their own delivery (oldest unbound wins)", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer alpha", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered");
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	// A's delivery: binds the oldest unbound record (A itself), retiring nothing.
+	transcript.push(userMsg("steer alpha"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "A's delivery bound A, retiring nothing");
+	// B's delivery: must still bind B (pre-fix it matched nothing and the
+	// unmatched-delivery rule retired the already-bound A).
+	transcript.push(userMsg("steer"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "B's delivery bound B, retiring nothing");
+	// Both adjacent deliveries fold into one merged frame, oldest to newest.
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result[result.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. steer alpha/);
+	assert.match(last.content, /2\. steer/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "both records consumed into the frame");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING 3: an undelivered (unbound) steer must not frame the run prompt;
+// it stays pending until its real delivery, then frames normally.
+test("steering-frame: an undelivered steer cannot frame the run prompt and survives pending", async () => {
+	const ext = await loadSteeringFrame();
+	// The run prompt is emitted and its guard consumed.
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "fix the bug" });
+	await ext.fire("agent_start", {});
+	const transcript = [userMsg("fix the bug")];
+	await ext.fire("message_end", { message: transcript[0] });
+	// Steer "fix" queued during asynchronous request preparation: recorded but
+	// undelivered (unbound). It prefix-matches the run prompt, so a walk that
+	// allowed unbound records would frame the RUN PROMPT as steering.
+	await ext.fire("input", { text: "fix", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered");
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(result, undefined, "the unbound steer did not frame the run prompt");
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "the unbound record is still pending");
+	// The steer's real delivery binds it; the next walk frames it.
+	transcript.push(userMsg("fix"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result2 = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result2[result2.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /1\. fix/);
+	assert.doesNotMatch(last.content, /fix the bug/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "the steer was consumed into the frame");
+	await ext.fire("agent_settled", { aborted: false });
+});

@@ -56,7 +56,12 @@
  *   records (see retry below); unmatched messages stay raw in place, and
  *   each group of ADJACENT matched messages is folded into one framed user
  *   message (an all-matched run — the common case — produces a single
- *   frame). Pending records consumed by the walk are removed from `pending`
+ *   frame). Only BOUND records are frame-eligible: an unbound record's
+ *   delivery has not happened yet, so letting it match would frame an
+ *   unrelated transcript message (typically the run prompt) as steering and
+ *   consume the record before its real delivery; unbound records survive
+ *   the walk's write-back in their arrival positions. Pending records
+ *   consumed by the walk are removed from `pending`
  *   (they now live in `framed`); framed records are consumed from a per-walk
  *   copy so one record cannot match several messages in one walk, while
  *   `framed` itself keeps them for retry.
@@ -236,6 +241,10 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 			runSawAssistant = true;
 			return;
 		}
+		// Non-user roles (toolResult, system, custom) are never queue deliveries:
+		// they must neither consume the prompt-skip guard nor correlate or retire
+		// pending records.
+		if (message.role !== "user") return;
 		// Correlate native queue deliveries (user messages appended by the
 		// queue drain) with pending records. Pre-assistant user messages are
 		// correlated too, because pi can drain queued steers at the very start
@@ -259,17 +268,36 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 
 		// Text records take priority over image-only ones: a mixed text+image
 		// delivery must bind to its own text record, not be stolen by a newer
-		// image-only record that merely shares the image presence.
-		let boundIdx = pending.findLastIndex((record) => matchesTextRecord(message, record));
-		if (boundIdx < 0) {
-			boundIdx = pending.findLastIndex((record) => matchesImageRecord(message, record));
+		// image-only record that merely shares the image presence. Within each
+		// pass the delivery binds to the OLDEST UNBOUND matching record, scanned
+		// from the start of `pending`: deliveries are FIFO, so a prefix-related
+		// newer record must not steal a delivery belonging to an older one (a
+		// newest-first scan would leave the older record's own delivery
+		// unmatched). Already-bound records are skipped in both passes: each
+		// belongs to a delivery already seen and must never bind a second one.
+		let boundRecord: SteerRecord | undefined;
+		for (const record of pending) {
+			if (record.bound) continue;
+			if (matchesTextRecord(message, record)) {
+				boundRecord = record;
+				break;
+			}
 		}
-		if (boundIdx >= 0) {
+		if (!boundRecord) {
+			for (const record of pending) {
+				if (record.bound) continue;
+				if (matchesImageRecord(message, record)) {
+					boundRecord = record;
+					break;
+				}
+			}
+		}
+		if (boundRecord) {
 			// Bind: remember the final delivered text so the context-time match
 			// is exact even when skill/template expansion changed the wording.
 			// The record stays pending (still awaiting its framing) and is now
 			// marked bound so retirement can never remove it.
-			const record = pending[boundIdx];
+			const record = boundRecord;
 			record.text = messageText(message);
 			record.hasImages = messageImages(message).length > 0 || record.hasImages;
 			record.bound = true;
@@ -304,7 +332,10 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		// tool activity can never be reached. Each message in the run is
 		// matched newest-first against the available records — pending records
 		// first (they are newer), then framed records — with the same
-		// text-before-image priority as delivery correlation. Unmatched
+		// text-before-image priority as delivery correlation. Only BOUND
+		// records are frame-eligible (an unbound record's delivery has not
+		// happened yet, so it must never frame a transcript message); the walk
+		// still matches newest-first. Unmatched
 		// messages stay raw and the walk continues, so a gap between two
 		// matched messages (e.g. an expanded steer that delivered unframed)
 		// cannot abandon the records behind it.
@@ -313,7 +344,15 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		const run = messages.slice(runStart);
 		if (run.length === 0) return;
 
-		const pool = [...pending];
+		// Only BOUND records are frame-eligible. An unbound record's delivery
+		// has not happened yet, so letting it match would frame an unrelated
+		// transcript message (typically the run prompt) as steering and consume
+		// the record before its real delivery. The pool is therefore bound
+		// records only; the write-back below filters `pending` by consumed
+		// object identity, which keeps unbound records pending in their arrival
+		// positions (a naive `pending = pool` write-back would drop them).
+		const pool = pending.filter((record) => record.bound);
+		const consumed = new Set<SteerRecord>();
 		// Retry pass works on a copy: a framed record must be consumed per walk
 		// (one record, one message) but `framed` itself keeps every record for
 		// later retry re-frames. The copy is taken before the walk so records
@@ -327,8 +366,11 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 			if (poolIdx < 0) poolIdx = pool.findLastIndex((record) => matchesImageRecord(message, record));
 			if (poolIdx >= 0) {
 				// Consumed into the current frame; keep a copy in `framed` for
-				// retry safety.
-				framed.push(...pool.splice(poolIdx, 1));
+				// retry safety. The consumed record object is tracked so the
+				// write-back removes exactly this record from `pending`.
+				const [record] = pool.splice(poolIdx, 1);
+				consumed.add(record);
+				framed.push(record);
 				matched[i] = true;
 				continue;
 			}
@@ -342,10 +384,12 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		}
 		if (!matched.some(Boolean)) return;
 
-		// Write the unconsumed remainder back: records consumed above now live
-		// in `framed`, so they must not stay pending (the status would keep
-		// counting them and later walks would see them twice).
-		pending = pool;
+		// Write the consumed records back out of `pending`: records consumed
+		// above now live in `framed`, so they must not stay pending (the status
+		// would keep counting them and later walks would see them twice).
+		// Filtering by object identity (the pool shares references with
+		// `pending`) leaves unbound records pending in their arrival positions.
+		pending = pending.filter((record) => !consumed.has(record));
 
 		// Retirement of delivered-but-unmatched records is handled by the
 		// message_end correlation above, so nothing extra is needed here.
