@@ -1284,6 +1284,72 @@ test("steering-frame: prefix-related steers each bind their own delivery (oldest
 	await ext.fire("agent_settled", { aborted: false });
 });
 
+// FINDING (reversed deliveries): recording order is not guaranteed to equal
+// delivery order. With A = "steer" recorded before B = "steer alpha" but
+// delivered B-first, prefix matching alone binds B's delivery to A (A's
+// shorter text prefix-matches the longer message) and overwrites A's text;
+// A's real delivery then matches nothing and retirement removes B. The exact
+// tier first lets each delivery bind its own record.
+test("steering-frame: reversed deliveries of prefix-related steers each bind their own record", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	// Recording order: A = "steer", then B = "steer alpha".
+	await ext.fire("input", { text: "steer", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer alpha", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered");
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	// Delivery order is REVERSED: B first, then A.
+	transcript.push(userMsg("steer alpha"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "B's delivery exact-matched B; nothing retired");
+	transcript.push(userMsg("steer"));
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	assert.equal(ext.status["steer-frame"], "⇡ 2 steered", "A's delivery exact-matched A; nothing retired");
+	// Both adjacent deliveries fold into one merged frame, in transcript
+	// order (B's message was appended first).
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const last = result[result.length - 1];
+	assert.match(last.content, /<user-steering>/);
+	assert.match(last.content, /^1\. steer alpha$/m);
+	assert.match(last.content, /^2\. steer$/m);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "both records consumed into the frame");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
+// FINDING (retry re-frame): initial framing consumes records newest-first, so
+// `framed` can hold [B("steer alpha"), A("steer")]. On the retry walk, A's
+// shorter text prefix-matches B's message; without the exact tier A would be
+// consumed for B's message and A's own message would stay raw.
+test("steering-frame: retry re-frames prefix-related steers without stealing each other's messages", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	// Recording and delivery order: A = "steer", then B = "steer alpha".
+	await ext.fire("input", { text: "steer", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer alpha", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = await deliverAndPrepare(ext, transcript, ["steer", "steer alpha"]);
+	assert.match(result.messages[result.messages.length - 1].content, /^1\. steer$/m);
+	assert.match(result.messages[result.messages.length - 1].content, /^2\. steer alpha$/m);
+	assert.equal(ext.status["steer-frame"], undefined, "both records framed");
+	// Retryable error: framed records survive the turn.
+	await ext.fire("turn_end", {
+		outcome: "error",
+		message: { role: "assistant", content: [], stopReason: "error", timestamp: ++steerSeq },
+	});
+	await ext.fire("agent_start", {});
+	// The retry's context_with_system sees the same tail; BOTH messages must
+	// still be framed (pre-fix the retry walk mis-bound A's record to B's
+	// message and left A's message raw).
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	const retryLast = retry[retry.length - 1];
+	assert.match(retryLast.content, /<user-steering>/);
+	assert.match(retryLast.content, /^1\. steer$/m);
+	assert.match(retryLast.content, /^2\. steer alpha$/m);
+	assert.equal(retry.length, transcript.length - 1, "both steers re-framed into one merged message; none left raw");
+	await ext.fire("agent_settled", { aborted: false });
+});
+
 // FINDING 3: an undelivered (unbound) steer must not frame the run prompt;
 // it stays pending until its real delivery, then frames normally.
 test("steering-frame: an undelivered steer cannot frame the run prompt and survives pending", async () => {

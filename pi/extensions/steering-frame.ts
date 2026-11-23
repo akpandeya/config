@@ -32,13 +32,23 @@
  *   queued steers at the very start of a run or automatic continuation,
  *   before any assistant message exists — those correlate too; skipping all
  *   pre-assistant user messages would leave their records armed. Matching is
- *   two-pass with text priority: a delivery first tries pending records with
- *   non-empty text (prefix match; a text+image steer is one message, so
- *   image-bearing deliveries are eligible), then the image-only records
- *   (record has no text but images; any delivered image block matches, since
- *   pi's queue normalization appends generated hint text that is not user
- *   content) — so a mixed text+image delivery can never be stolen by a
- *   newer image-only record. Deliveries are FIFO, so:
+ *   three-tier with exact-first priority, each tier scanning for the oldest
+ *   unbound record: (1) exact trimmed text equality — a bound record's text
+ *   IS the exact delivered message text (binding copies it), so a record
+ *   always exact-matches its own delivery; this tier is what keeps
+ *   prefix-related steers from binding each other's deliveries when the
+ *   delivery order differs from the recording order (recording order is not
+ *   guaranteed to equal delivery order: async input processing or
+ *   interleaved messages can reorder them); (2) prefix match on non-empty
+ *   record text (a text+image steer is one message, so image-bearing
+ *   deliveries are eligible) — skill/template expansion can change the
+ *   wording, which is why unmatchable deliveries retire a record instead of
+ *   sticking around; (3) image-only match (record has no text but images;
+ *   any delivered image block matches, since pi's queue normalization
+ *   appends generated hint text that is not user content). An exact match
+ *   always wins over a prefix one and a prefix one over an image-only one,
+ *   so a mixed text+image delivery can never be stolen by a newer
+ *   image-only record. Deliveries are FIFO, so:
  *   a delivery that matches a record binds to it (the record's text is
  *   updated to the final delivered text, the record is marked bound, and it
  *   stays pending until the context walk frames it); a delivery that matches
@@ -52,8 +62,10 @@
  *   messages (down to the first non-user message, which bounds the walk so
  *   older prompts below recent tool activity can never be reached). Each
  *   message in the run is matched — newest first, with the same
- *   text-before-image priority — against pending records plus `framed`
- *   records (see retry below); unmatched messages stay raw in place, and
+ *   exact-before-prefix-before-image tier order as delivery correlation,
+ *   each tier trying the pending pool before the framed pool — against
+ *   pending records plus `framed` records (see retry below); unmatched
+ *   messages stay raw in place, and
  *   each group of ADJACENT matched messages is folded into one framed user
  *   message (an all-matched run — the common case — produces a single
  *   frame). Only BOUND records are frame-eligible: an unbound record's
@@ -70,7 +82,11 @@
  *   request after a retryable error — or compacts and retries a response that
  *   hit the length limit, which pi reports as `outcome: "completed"` with
  *   `stopReason: "length"` — the retry's `context_with_system` re-frames the
- *   same batch instead of sending it raw. Settle and session start clear
+ *   same batch instead of sending it raw. The retry walk uses the same
+ *   exact-first tier order, so prefix-related framed records re-bind to
+ *   their own messages instead of stealing each other's (initial framing
+ *   consumes newest-first, so `framed` can hold a longer steer before the
+ *   shorter one it is a superset of). Settle and session start clear
  *   everything.
  *
  * Known limitation: pi gives deliveries no provenance, so a follow-up that
@@ -116,12 +132,29 @@ function messageImages(message: AgentMessage) {
 }
 
 /**
- * Text pass: does a delivered transcript message correspond to a steer record
- * that has text? The delivered text must prefix-match the record text
- * (trim-start on both sides; skill/template expansion can change the wording,
- * which is why unmatchable deliveries retire a record instead of sticking
- * around). An image-bearing delivery CAN match a text record — a steer text
- * plus an attached image is one message.
+ * Exact tier (tried before the prefix pass): does the delivered transcript
+ * message text equal the record text, trimmed on both sides? A bound
+ * record's text IS the exact delivered message text (binding copies
+ * `messageText(message)`), and the context walk matches that same persisted
+ * transcript message — so a bound record always exact-matches its own
+ * message. Prefix matching alone is ambiguous for prefix-related steers
+ * (A = "steer", B = "steer alpha"): the shorter text prefix-matches the
+ * longer message, so exact equality must be tried first wherever a record
+ * is matched against a message.
+ */
+function exactTextMatch(deliveredMessage: AgentMessage, record: SteerRecord): boolean {
+	const rawTrimmed = record.text.trim();
+	if (rawTrimmed.length === 0) return false;
+	return messageText(deliveredMessage).trim() === rawTrimmed;
+}
+
+/**
+ * Prefix tier (tier 2, after the exact tier): does a delivered transcript
+ * message correspond to a steer record that has text? The delivered text
+ * must prefix-match the record text (trim-start on both sides; skill/template
+ * expansion can change the wording, which is why unmatchable deliveries
+ * retire a record instead of sticking around). An image-bearing delivery CAN
+ * match a text record — a steer text plus an attached image is one message.
  */
 function matchesTextRecord(deliveredMessage: AgentMessage, record: SteerRecord): boolean {
 	const rawTrimmed = record.text.trim();
@@ -136,11 +169,12 @@ function matchesTextRecord(deliveredMessage: AgentMessage, record: SteerRecord):
 }
 
 /**
- * Image pass: does a delivered transcript message correspond to an image-only
- * steer record (no text, images attached)? The delivered message only needs to
- * carry at least one image block; pi's queue normalization can append
- * image-hint text to the delivery, and that generated text is not user content,
- * so the delivered text is not required to be empty.
+ * Image tier (tier 3, after exact and prefix): does a delivered transcript
+ * message correspond to an image-only steer record (no text, images
+ * attached)? The delivered message only needs to carry at least one image
+ * block; pi's queue normalization can append image-hint text to the
+ * delivery, and that generated text is not user content, so the delivered
+ * text is not required to be empty.
  */
 function matchesImageRecord(deliveredMessage: AgentMessage, record: SteerRecord): boolean {
 	if (record.text.trim().length > 0 || !record.hasImages) return false;
@@ -266,32 +300,35 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		}
 		if (pending.length === 0) return;
 
-		// Text records take priority over image-only ones: a mixed text+image
-		// delivery must bind to its own text record, not be stolen by a newer
-		// image-only record that merely shares the image presence. Within each
-		// pass the delivery binds to the OLDEST UNBOUND matching record, scanned
-		// from the start of `pending`: deliveries are FIFO, so a prefix-related
-		// newer record must not steal a delivery belonging to an older one (a
-		// newest-first scan would leave the older record's own delivery
-		// unmatched). Already-bound records are skipped in both passes: each
-		// belongs to a delivery already seen and must never bind a second one.
-		let boundRecord: SteerRecord | undefined;
-		for (const record of pending) {
-			if (record.bound) continue;
-			if (matchesTextRecord(message, record)) {
-				boundRecord = record;
-				break;
-			}
-		}
-		if (!boundRecord) {
-			for (const record of pending) {
-				if (record.bound) continue;
-				if (matchesImageRecord(message, record)) {
-					boundRecord = record;
-					break;
-				}
-			}
-		}
+		// Three-tier match order, each tier scanning `pending` from the start
+		// for the OLDEST UNBOUND matching record (already-bound records are
+		// skipped in every tier: each belongs to a delivery already seen and
+		// must never bind a second one):
+		//   1. Exact trimmed text equality (see `exactTextMatch`). A bound
+		//      record's text is the exact delivered message text, and the
+		//      delivery being correlated IS that message, so a record always
+		//      exact-matches its own delivery. This tier is what keeps
+		//      prefix-related steers from binding each other's deliveries when
+		//      the delivery order differs from the recording order (recording
+		//      order is not guaranteed to equal delivery order): with
+		//      A = "steer" and B = "steer alpha" recorded in that order but
+		//      delivered B-first, prefix matching alone would bind B's delivery
+		//      to A (A's shorter text prefix-matches) and overwrite A's text,
+		//      leaving A's real delivery unmatched and retiring the wrong
+		//      record.
+		//   2. Prefix match (see `matchesTextRecord`): skill/template expansion
+		//      can change the wording, so an expanded delivery only shares a
+		//      prefix — or nothing at all.
+		//   3. Image-only match (see `matchesImageRecord`). A mixed text+image
+		//      delivery must bind to its own text record, not be stolen by a
+		//      newer image-only record that merely shares the image presence;
+		//      the image tier runs last for exactly that reason.
+		const oldestUnbound = (match: (record: SteerRecord) => boolean) =>
+			pending.find((record) => !record.bound && match(record));
+		const boundRecord =
+			oldestUnbound((record) => exactTextMatch(message, record)) ??
+			oldestUnbound((record) => matchesTextRecord(message, record)) ??
+			oldestUnbound((record) => matchesImageRecord(message, record));
 		if (boundRecord) {
 			// Bind: remember the final delivered text so the context-time match
 			// is exact even when skill/template expansion changed the wording.
@@ -332,7 +369,8 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		// tool activity can never be reached. Each message in the run is
 		// matched newest-first against the available records — pending records
 		// first (they are newer), then framed records — with the same
-		// text-before-image priority as delivery correlation. Only BOUND
+		// exact-before-prefix-before-image tier order as delivery correlation
+		// (see the per-message match below). Only BOUND
 		// records are frame-eligible (an unbound record's delivery has not
 		// happened yet, so it must never frame a transcript message); the walk
 		// still matches newest-first. Unmatched
@@ -359,27 +397,47 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		// consumed from `pool` mid-walk cannot be matched again as framed ones.
 		const retryPool = [...framed];
 		const matched = new Array<boolean>(run.length).fill(false);
+		// Per-message match across both pools in the three-tier order —
+		// (1) exact text, (2) prefix, (3) image-only — with each tier trying
+		// the pending pool first (newer records) and the framed retry pool
+		// second. A tier never falls through to the next one while a match of
+		// the current tier exists in either pool, so an exact match always
+		// beats a prefix one and a prefix one beats an image-only one,
+		// regardless of which pool holds it. Exact-first is what keeps
+		// prefix-related framed records from stealing each other's messages on
+		// a retry re-frame: initial framing consumes records newest-first, so
+		// `framed` can hold [B("steer alpha"), A("steer")], and on the retry
+		// walk A's shorter text prefix-matches B's message — without the exact
+		// tier, A would be consumed for B's message and A's own message would
+		// stay raw. Within a tier, newest-first (`findLastIndex`) keeps
+		// preferring the newest record, as before.
+		const matchAcrossPools = (match: (record: SteerRecord) => boolean) => {
+			const poolIdx = pool.findLastIndex((record) => match(record));
+			if (poolIdx >= 0) return { fromPool: true as const, index: poolIdx };
+			const retryIdx = retryPool.findLastIndex((record) => match(record));
+			if (retryIdx >= 0) return { fromPool: false as const, index: retryIdx };
+			return undefined;
+		};
 		for (let i = run.length - 1; i >= 0; i--) {
 			if (pool.length === 0 && retryPool.length === 0) break;
 			const message = run[i];
-			let poolIdx = pool.findLastIndex((record) => matchesTextRecord(message, record));
-			if (poolIdx < 0) poolIdx = pool.findLastIndex((record) => matchesImageRecord(message, record));
-			if (poolIdx >= 0) {
+			const hit =
+				matchAcrossPools((record) => exactTextMatch(message, record)) ??
+				matchAcrossPools((record) => matchesTextRecord(message, record)) ??
+				matchAcrossPools((record) => matchesImageRecord(message, record));
+			if (!hit) continue; // unmatched: stays raw, walk keeps going
+			if (hit.fromPool) {
 				// Consumed into the current frame; keep a copy in `framed` for
 				// retry safety. The consumed record object is tracked so the
 				// write-back removes exactly this record from `pending`.
-				const [record] = pool.splice(poolIdx, 1);
+				const [record] = pool.splice(hit.index, 1);
 				consumed.add(record);
 				framed.push(record);
-				matched[i] = true;
-				continue;
+			} else {
+				// Already in `framed` (shared object reference) — consume only
+				// from the walk's copy, never push it into `framed` again.
+				retryPool.splice(hit.index, 1);
 			}
-			let framedIdx = retryPool.findLastIndex((record) => matchesTextRecord(message, record));
-			if (framedIdx < 0) framedIdx = retryPool.findLastIndex((record) => matchesImageRecord(message, record));
-			if (framedIdx < 0) continue; // unmatched: stays raw, walk keeps going
-			// Already in `framed` (shared object reference) — consume only
-			// from the walk's copy, never push it into `framed` again.
-			retryPool.splice(framedIdx, 1);
 			matched[i] = true;
 		}
 		if (!matched.some(Boolean)) return;
