@@ -202,7 +202,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		// Footer status
 		if (executionMode && todoItems.length > 0) {
 			const completed = todoItems.filter((t) => t.completed).length;
-			const label = reviewing ? `🔍 review ${reviewRound}/${reviewRoundLimit}` : `📋 ${completed}/${todoItems.length}`;
+			// Phase-aware label: a fix round (review requested changes, implementer
+			// dispatch running) is not "steps still to do" — without this the widget
+			// read as stale plan work while only review findings were pending.
+			const label = reviewing
+				? `🔍 review ${reviewRound}/${reviewRoundLimit}`
+				: reviewRound > 0
+					? `🔧 fixes ${reviewRound}/${reviewRoundLimit}`
+					: `📋 ${completed}/${todoItems.length}`;
 			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `${label}${model}`));
 		} else if (planModeEnabled) {
 			ctx.ui.setStatus(
@@ -650,6 +657,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	async function beginReview(ctx: ExtensionContext): Promise<void> {
 		reviewRound += 1;
+		// Defensive: review only starts from an all-complete state, but force it so
+		// the todo widget can never show unchecked steps once review is running
+		// (a state glitch here used to read as "3 more steps" during the review).
+		for (const t of todoItems) t.completed = true;
+		persistState();
 		// The reviewer and skip decision were made at approval time; the loop
 		// below (review -> fixes -> re-review) runs without further dialogs.
 		if (reviewSkipUpfront) {
@@ -681,6 +693,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			reviewerModel = snapshotModel(ctx);
 		}
 		reviewing = true;
+		updateStatus(ctx);
 		// Read-only review: a fixed whitelist, not the inherited tool set (custom
 		// tools may mutate state). The subagent tool joins the whitelist when the
 		// subagent extension is loaded, so the review can be dispatched to the
