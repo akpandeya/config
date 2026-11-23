@@ -872,3 +872,141 @@ test("steering-frame: whitespace-only input without images is not recorded", asy
 	const result = (await ext.fire("context_with_system", { messages: idle }))[0];
 	assert.equal(result, undefined);
 });
+
+test("steering-frame: framing writes consumed records back out of pending", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer A", streamingBehavior: "steer" });
+	await ext.fire("input", { text: "steer B", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["steer A", "steer B"]))?.messages;
+	assert.match(result[result.length - 1].content, /2 messages arrived/);
+	// Write-back: A and B moved into the frame, so they must have left
+	// `pending` (the stale-pending bug kept the status armed forever).
+	assert.equal(ext.status["steer-frame"], undefined, "framed records are no longer pending");
+	// A steer queued during preparation is then the only pending record.
+	await ext.fire("input", { text: "steer C", streamingBehavior: "steer" });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "only the queued steer is pending");
+	await ext.fire("turn_end", {
+		outcome: "completed",
+		message: { role: "assistant", content: [], stopReason: "stop", timestamp: ++steerSeq },
+	});
+	await ext.fire("agent_settled", { aborted: false });
+	const idle = [userMsg("unrelated follow-up")];
+	const idleResult = (await ext.fire("context_with_system", { messages: idle }))[0];
+	assert.equal(idleResult, undefined, "nothing is framed after the turn");
+	assert.equal(ext.status["steer-frame"], undefined, "status cleared after settle");
+});
+
+test("steering-frame: one framed record cannot match several consecutive user messages", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "/review", streamingBehavior: "steer" });
+	// Tail [user("/review-notes"), user("/review")]: the bound "/review" text
+	// is a prefix of the earlier message, so a record that stays matchable
+	// after consumption would fold "/review-notes" into the frame too.
+	const transcript = [userMsg("task"), userMsg("/review-notes"), userMsg("/review")];
+	await ext.fire("message_end", { message: transcript[transcript.length - 1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.equal(result.length, transcript.length, "the single steer folds into one message");
+	const last = result[result.length - 1];
+	assert.match(last.content, /1\. \/review/);
+	assert.doesNotMatch(last.content, /\/review-notes/, "prefix-related earlier message is not folded in");
+	assert.equal(ext.status["steer-frame"], undefined, "the record left pending with the frame");
+});
+
+test("steering-frame: retry re-frames from framed records, and a normal completion clears them", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer R", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["steer R"]))?.messages;
+	assert.match(result[result.length - 1].content, /1\. steer R/);
+	assert.equal(ext.status["steer-frame"], undefined, "proven via framed: nothing left pending");
+	// Retryable error: framed records survive the turn.
+	await ext.fire("turn_end", {
+		outcome: "error",
+		message: { role: "assistant", content: [], stopReason: "error", timestamp: ++steerSeq },
+	});
+	// Fresh run: framing must come from `framed`, not stale pending records.
+	await ext.fire("agent_start", {});
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(retry[retry.length - 1].content, /<user-steering>/, "retry re-frames the same batch");
+	// A normal completion (non-length stop reason) drops them.
+	await ext.fire("turn_end", {
+		outcome: "completed",
+		message: { role: "assistant", content: [], stopReason: "stop", timestamp: ++steerSeq },
+	});
+	const idle = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(idle, undefined, "unframed after a normal completion");
+});
+
+test("steering-frame: a length-capped response keeps framed records for the compact-and-retry pass", async () => {
+	const ext = await loadSteeringFrame();
+	await runStarted(ext);
+	await ext.fire("input", { text: "steer L", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), assistantToolMsg(), toolResultMsg("ok")];
+	const result = (await deliverAndPrepare(ext, transcript, ["steer L"]))?.messages;
+	assert.match(result[result.length - 1].content, /1\. steer L/);
+	// pi reports a length-capped assistant response as outcome "completed"
+	// with stopReason "length"; the records must survive the later retry.
+	await ext.fire("turn_end", {
+		outcome: "completed",
+		message: { role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "length", timestamp: ++steerSeq },
+	});
+	const retry = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.match(retry[retry.length - 1].content, /<user-steering>/, "length completion keeps the records");
+	// Without a recovery the settle clears them.
+	await ext.fire("agent_settled", { aborted: false });
+	const idle = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(idle, undefined, "settle clears the retained records");
+});
+
+test("steering-frame: pre-assistant deliveries correlate; only the run's own prompt is skipped", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	// A steer typed right at run start is recorded and drained before any
+	// assistant message exists.
+	await ext.fire("input", { text: "check the logs first", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), userMsg("check the logs first")];
+	// The run's own prompt is not a delivery: it must be skipped without
+	// retiring the armed record.
+	await ext.fire("message_end", { message: transcript[0] });
+	assert.equal(ext.status["steer-frame"], "⇡ 1 steered", "run prompt did not retire the record");
+	// The pre-assistant steer delivery correlates like any delivery.
+	await ext.fire("message_end", { message: transcript[1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0]?.messages;
+	assert.equal(result.length, transcript.length, "the steer folds into one frame message");
+	const last = result[result.length - 1];
+	assert.match(last.content, /1\. check the logs first/);
+	assert.doesNotMatch(last.content, /(^|\n)task(\n|$)/, "the run prompt itself is not framed");
+	assert.equal(ext.status["steer-frame"], undefined, "the record left pending with the frame");
+});
+
+test("steering-frame: an expanded steer delivered pre-assistant still retires at delivery", async () => {
+	const ext = await loadSteeringFrame();
+	await ext.fire("before_agent_start", { messageType: "user", prompt: "task" });
+	await ext.fire("agent_start", {});
+	await ext.fire("input", { text: "/review", streamingBehavior: "steer" });
+	const transcript = [userMsg("task"), userMsg("Review the whole diff carefully and report findings")];
+	// The run prompt arrives first (skipped), then the expanded delivery
+	// matches nothing and must retire the record even before any assistant
+	// message — otherwise it stays armed and can falsely frame a follow-up.
+	await ext.fire("message_end", { message: transcript[0] });
+	await ext.fire("message_end", { message: transcript[1] });
+	const result = (await ext.fire("context_with_system", { messages: transcript }))[0];
+	assert.equal(result, undefined, "expanded steer delivers unframed");
+	// The record must be gone: a later follow-up that prefix-matches the raw
+	// text must not resurrect it as steering.
+	await ext.fire("agent_settled", { aborted: false });
+	await runStarted(ext);
+	const transcript2 = [userMsg("task2"), assistantToolMsg(), toolResultMsg("ok")];
+	const result2 = await deliverAndPrepare(ext, transcript2, ["/review the notes"]);
+	const delivered2 = (result2?.messages ?? transcript2)[transcript2.length - 1];
+	assert.doesNotMatch(
+		typeof delivered2.content === "string" ? delivered2.content : "",
+		/user-steering/,
+		"no false frame from a record that should have retired pre-assistant",
+	);
+});

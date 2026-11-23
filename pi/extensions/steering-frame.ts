@@ -18,21 +18,37 @@
  *
  * - `input` (streamingBehavior "steer") records `{ text, hasImages }` in
  *   arrival order. Text is raw, before skill/template expansion.
- * - `message_end` for a user message that arrives after the run's first
- *   assistant message is a native queue delivery (the run's own prompt fires
- *   before any assistant message and is excluded). Deliveries are FIFO, so:
+ * - `message_end` for a user message is a native queue delivery, except the
+ *   run's own starting prompt (captured in `before_agent_start` as the
+ *   post-expansion prompt, adopted on `agent_start`). Deliveries usually
+ *   arrive after the run's first assistant message, but pi can also drain
+ *   queued steers at the very start of a run or automatic continuation,
+ *   before any assistant message exists — those correlate too; skipping all
+ *   pre-assistant user messages would leave their records armed. Deliveries
+ *   are FIFO, so:
  *   a delivery that prefix-matches a pending record binds to it (the record's
  *   text is updated to the final delivered text); a delivery that matches
  *   nothing retires the oldest pending record — its delivery window has
  *   passed, and leaving it armed could falsely frame a later follow-up.
  *   Expanded skill/template steers therefore deliver unframed (benign).
  * - `context_with_system` walks the transcript tail backwards, matching user
- *   messages against pending records plus `framed` records (see retry below),
- *   and folds the matched run into one framed user message.
+ *   messages against pending records plus `framed` records (see retry
+ *   below), and folds the matched run into one framed user message. Pending
+ *   records consumed by the walk are removed from `pending` (they now live
+ *   in `framed`); framed records are consumed from a per-walk copy so one
+ *   record cannot match several consecutive user messages, while `framed`
+ *   itself keeps them for retry.
  * - Matched records move to `framed` and stay there until `turn_end` reports
- *   `outcome: "completed"`. If pi retries the request after a retryable error,
- *   the retry's `context_with_system` re-frames the same batch instead of
- *   sending it raw. Settle and session start clear everything.
+ *   `outcome: "completed"` with a non-`length` stop reason. If pi retries the
+ *   request after a retryable error — or compacts and retries a response that
+ *   hit the length limit, which pi reports as `outcome: "completed"` with
+ *   `stopReason: "length"` — the retry's `context_with_system` re-frames the
+ *   same batch instead of sending it raw. Settle and session start clear
+ *   everything.
+ *
+ * Known limitation: pi gives deliveries no provenance, so a follow-up that
+ * prefix-matches a still-pending steer can bind to it and be framed as
+ * steering. Mislabel-only risk: the message still reaches the model.
  *
  * Not implemented (on purpose): queue editing (↑). Pi's extension API does not
  * expose queue manipulation, so editing would require the extension to own the
@@ -121,6 +137,10 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	let framed: SteerRecord[] = [];
 	/** Whether the current run has produced an assistant message yet. */
 	let runSawAssistant = false;
+	/** Starting prompt staged by `before_agent_start`, adopted on `agent_start`. */
+	let stagedPrompt: string | undefined;
+	/** The current run's own starting prompt (post-expansion text). */
+	let runPrompt: string | undefined;
 
 	function updateStatus(ctx: ExtensionContext): void {
 		if (pending.length > 0) {
@@ -147,8 +167,17 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	// recorded steers, drop it so it is not framed later. Exact match on
 	// purpose: prefix matching could drop a different, prefix-related pending
 	// entry; a missed drop only stays pending until agent_settled clears it.
+	// The prompt is also staged here because `before_agent_start` fires before
+	// `agent_start`: message_end needs it to tell the run's own prompt apart
+	// from genuine pre-assistant deliveries.
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (event.messageType !== "user" || pending.length === 0) return;
+		if (event.messageType !== "user") {
+			// Custom-message runs have no user prompt; nothing may be skipped.
+			stagedPrompt = undefined;
+			return;
+		}
+		stagedPrompt = event.prompt;
+		if (pending.length === 0) return;
 		const prompt = event.prompt.trim();
 		const idx = pending.findIndex((p) => p.text.trim() === prompt);
 		if (idx >= 0) {
@@ -159,6 +188,10 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 
 	pi.on("agent_start", async () => {
 		runSawAssistant = false;
+		// Adopt the staged prompt; agent_start must not clear a value set by
+		// before_agent_start. Continuations re-fire agent_start without a new
+		// before_agent_start, keeping the same run prompt.
+		runPrompt = stagedPrompt;
 	});
 
 	pi.on("message_end", async (event) => {
@@ -167,9 +200,18 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 			runSawAssistant = true;
 			return;
 		}
-		// Correlate native queue deliveries (user messages appended after the
-		// run's first assistant message) with pending records.
-		if (message.role !== "user" || !runSawAssistant || pending.length === 0) return;
+		// Correlate native queue deliveries (user messages appended by the
+		// queue drain) with pending records. Pre-assistant user messages are
+		// correlated too, because pi can drain queued steers at the very start
+		// of a run or automatic continuation — with one exception: the run's
+		// own starting prompt, which fires before any assistant message and is
+		// not a delivery.
+		if (message.role !== "user" || pending.length === 0) return;
+		if (!runSawAssistant) {
+			if (runPrompt !== undefined && messageText(message).trim() === runPrompt.trim()) {
+				return;
+			}
+		}
 
 		const boundIdx = pending.findLastIndex((record) => matchesRecord(message, record));
 		if (boundIdx >= 0) {
@@ -199,23 +241,38 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		// being prepared stays pending untouched, because the tail simply runs
 		// out of matching messages before reaching it.
 		const pool = [...pending];
+		// Retry pass works on a copy: a framed record must be consumed per walk
+		// (one record, one message) but `framed` itself keeps every record for
+		// later retry re-frames. The copy is taken before the walk so records
+		// consumed from `pool` mid-walk cannot be matched again as framed ones.
+		const retryPool = [...framed];
 		let matchedCount = 0;
-		while (matchedCount < messages.length && pool.length + framed.length > 0) {
+		while (matchedCount < messages.length && pool.length + retryPool.length > 0) {
 			const message = messages[messages.length - 1 - matchedCount];
 			if (message.role !== "user") break;
 
-			let poolIdx = pool.findLastIndex((record) => matchesRecord(message, record));
+			const poolIdx = pool.findLastIndex((record) => matchesRecord(message, record));
 			if (poolIdx >= 0) {
 				// Consumed into the current frame; keep a copy in `framed` for
 				// retry safety.
 				framed.push(...pool.splice(poolIdx, 1));
 			} else {
-				const framedIdx = framed.findLastIndex((record) => matchesRecord(message, record));
+				const framedIdx = retryPool.findLastIndex((record) => matchesRecord(message, record));
 				if (framedIdx < 0) break;
+				// Already in `framed` (shared object reference) — consume only
+				// from the walk's copy, never push it into `framed` again.
+				retryPool.splice(framedIdx, 1);
 			}
 			matchedCount++;
 		}
 		if (matchedCount === 0) return;
+
+		// Write the unconsumed remainder back: records consumed above now live
+		// in `framed`, so they must not stay pending (the status would keep
+		// counting them and later walks would see them twice).
+		if (matchedCount > 0) {
+			pending = pool;
+		}
 
 		// Retirement of delivered-but-unmatched records is handled by the
 		// message_end correlation above (FIFO: an unmatched delivery retires
@@ -243,8 +300,12 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	// A completed turn proves the framed request reached the model; drop its
 	// records. Non-completed outcomes keep them so an automatic retry (which
 	// re-invokes context_with_system with the same tail) re-frames the batch.
+	// A `length` stop reason also reports "completed", but pi can later
+	// compact-and-retry such a response with the original steering messages,
+	// so those records are kept too; agent_settled clears them if no retry
+	// happens.
 	pi.on("turn_end", async (event) => {
-		if (event.outcome === "completed" && framed.length > 0) {
+		if (event.outcome === "completed" && event.message?.stopReason !== "length" && framed.length > 0) {
 			framed = [];
 		}
 	});
@@ -253,6 +314,7 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 	// never frame an unrelated future prompt. Settled also covers the normal
 	// end of a run, clearing any leftovers.
 	pi.on("agent_settled", async (_event, ctx) => {
+		runPrompt = undefined;
 		if (pending.length === 0 && framed.length === 0) return;
 		pending = [];
 		framed = [];
@@ -263,6 +325,8 @@ export default function steeringFrameExtension(pi: ExtensionAPI): void {
 		pending = [];
 		framed = [];
 		runSawAssistant = false;
+		stagedPrompt = undefined;
+		runPrompt = undefined;
 		updateStatus(ctx);
 	});
 }
