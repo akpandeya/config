@@ -64,6 +64,7 @@
   need a delegation ceremony, and unsupported agents must not be invented.
 - Handoffs must be self-contained: the exact task and acceptance checks, the relevant plan steps and repo conventions, data-flow invariants, and exact file paths. Pass what the delegate needs — not a rigid EVERYTHING/verbatim-transcript dump.
 - `@coder`-style mention syntax is OpenCode-specific; in other harnesses use the configured coder agent or an equivalent coding subagent instead of assuming the syntax exists.
+- Subagent/model naming is per-harness and easy to conflate: in pi's `subagent` tool, `agent` takes an agent definition name (`planner`, `reviewer`, `worker`, …), never a model id — pass the chosen model as the per-dispatch `model: "provider/id"` override instead. Check the tool's actual parameter semantics before dispatching with an unfamiliar harness.
 
 ## Coding & testing rules
 - Names encode meaning, scope, and mutation; rename when behavior drifts from the name.
